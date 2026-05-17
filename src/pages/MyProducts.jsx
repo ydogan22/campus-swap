@@ -15,7 +15,9 @@ const STATUS_STYLE = {
 }
 
 export default function MyProducts() {
-  const { user } = useAuth()
+  // authLoading = true while Supabase session is still being resolved.
+  // We must NOT query with user.id until authLoading is false.
+  const { user, loading: authLoading } = useAuth()
 
   const [products,    setProducts]    = useState([])
   const [categories,  setCategories]  = useState([])
@@ -33,23 +35,65 @@ export default function MyProducts() {
   const [photoPreviews, setPhotoPreviews] = useState([])
   const fileRef = useRef(null)
 
-  /* ── Load ── */
+  /* ── Load ──
+   * Only runs after auth has fully resolved (authLoading === false)
+   * and a valid user session exists.  If either is missing we clear
+   * the spinner immediately so the page never hangs.
+   */
   const load = async () => {
-    if (!user) return
+    // Auth still resolving — wait for the next effect cycle
+    if (authLoading) return
+
+    // No session — clear spinner so the page doesn’t hang on initial render
+    if (!user) {
+      setLoading(false)
+      return
+    }
+
     setLoading(true)
-    const [{ data: prods }, { data: cats }] = await Promise.all([
-      supabase
-        .from('Product')
-        .select('ProductID, Title, ItemCondition, Status, ViewCount, CategoryID, ProductPhoto(PhotoURL)')
-        .eq('OwnerID', user.id)
-        .order('ProductID', { ascending: false }),
-      supabase.from('Category').select('CategoryID, CategoryName'),
-    ])
-    setProducts(prods ?? [])
-    setCategories(cats ?? [])
-    setLoading(false)
+    try {
+      // Column name confirmed against schema: Product.OwnerID UUID NOT NULL
+      console.log('[MyProducts] Fetching products for UserID:', user.id)
+
+      const [prodRes, catRes] = await Promise.all([
+        supabase
+          .from('Product')
+          .select('ProductID, Title, ItemCondition, Status, ViewCount, CategoryID, ProductPhoto(PhotoURL)')
+          .eq('OwnerID', user.id)     // OwnerID — matches schema FK column
+          .order('ProductID', { ascending: false }),
+        supabase.from('Category').select('CategoryID, CategoryName'),
+      ])
+
+      // Strict error logging so Supabase issues are always visible
+      if (prodRes.error) {
+        console.error('[MyProducts] Product query error:', {
+          message: prodRes.error.message,
+          code:    prodRes.error.code,
+          hint:    prodRes.error.hint,
+          details: prodRes.error.details,
+        })
+        setError('Could not load products: ' + prodRes.error.message)
+      } else {
+        console.log('[MyProducts] Loaded', prodRes.data?.length ?? 0, 'products')
+        setProducts(prodRes.data ?? [])
+      }
+
+      if (catRes.error) {
+        console.error('[MyProducts] Category query error:', catRes.error)
+      }
+      setCategories(catRes.data ?? [])
+
+    } catch (err) {
+      console.error('[MyProducts] Unexpected exception:', err)
+      setError('Unexpected error: ' + err.message)
+    } finally {
+      setLoading(false)
+    }
   }
-  useEffect(() => { load() }, [user])
+
+  // Re-run whenever auth state changes. authLoading is included so
+  // the effect fires a second time once auth finishes resolving.
+  useEffect(() => { load() }, [user, authLoading])
 
   const set = (f) => (e) => setForm(prev => ({ ...prev, [f]: e.target.value }))
 
@@ -86,53 +130,62 @@ export default function MyProducts() {
     if (!form.title.trim()) { setError('Title is required.'); return }
     setSaving(true)
 
-    let productId = editProduct?.ProductID
+    try {
+      let productId = editProduct?.ProductID
 
-    if (editProduct) {
-      /* Update */
-      const { error: upErr } = await supabase
-        .from('Product')
-        .update({
-          Title: form.title.trim(),
-          ItemCondition: form.condition,
-          CategoryID: form.categoryId || null,
-          Status: form.status,
-        })
-        .eq('ProductID', productId)
-      if (upErr) { setError(upErr.message); setSaving(false); return }
-    } else {
-      /* Insert */
-      const { data, error: insErr } = await supabase
-        .from('Product')
-        .insert({
-          OwnerID:       user.id,
-          Title:         form.title.trim(),
-          Description:   form.description.trim() || null,
-          ItemCondition: form.condition,
-          CategoryID:    form.categoryId || null,
-          Status:        'Available',
-          ViewCount:     0,
-        })
-        .select('ProductID')
-        .single()
-      if (insErr) { setError(insErr.message); setSaving(false); return }
-      productId = data.ProductID
+      if (editProduct) {
+        /* Update */
+        const { error: upErr } = await supabase
+          .from('Product')
+          .update({
+            Title: form.title.trim(),
+            ItemCondition: form.condition,
+            CategoryID: form.categoryId || null,
+            Status: form.status,
+          })
+          .eq('ProductID', productId)
+        if (upErr) { setError(upErr.message); return }
+      } else {
+        /* Insert */
+        const { data, error: insErr } = await supabase
+          .from('Product')
+          .insert({
+            OwnerID:       user.id,
+            Title:         form.title.trim(),
+            Description:   form.description.trim() || null,
+            ItemCondition: form.condition,
+            CategoryID:    form.categoryId || null,
+            Status:        'Available',
+            ViewCount:     0,
+          })
+          .select('ProductID')
+          .single()
+        if (insErr) { setError(insErr.message); return }
+        if (!data?.ProductID) { setError('Insert succeeded but returned no ID. Check RLS policies.'); return }
+        productId = data.ProductID
+      }
+
+      /* Upload photos (only if we have a valid product ID) */
+      for (const file of photoFiles) {
+        const ext  = file.name.split('.').pop()
+        const path = `products/${productId}/${Date.now()}.${ext}`
+        const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, file)
+        if (upErr) { setError('Photo upload failed: ' + upErr.message); return }
+        const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(path)
+        const { error: photoErr } = await supabase
+          .from('ProductPhoto')
+          .insert({ ProductID: productId, PhotoURL: urlData.publicUrl })
+        if (photoErr) { setError('Photo record failed: ' + photoErr.message); return }
+      }
+
+      setSuccess(editProduct ? 'Product updated!' : 'Product listed!')
+      setShowForm(false)
+      load()
+    } catch (err) {
+      setError('Unexpected error: ' + err.message)
+    } finally {
+      setSaving(false)   // ← always runs, no more stuck spinner
     }
-
-    /* Upload photos */
-    for (const file of photoFiles) {
-      const ext  = file.name.split('.').pop()
-      const path = `products/${productId}/${Date.now()}.${ext}`
-      const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, file)
-      if (upErr) { setError('Photo upload failed: ' + upErr.message); setSaving(false); return }
-      const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(path)
-      await supabase.from('ProductPhoto').insert({ ProductID: productId, PhotoURL: urlData.publicUrl })
-    }
-
-    setSaving(false)
-    setSuccess(editProduct ? 'Product updated!' : 'Product listed!')
-    setShowForm(false)
-    load()
   }
 
   const handleDelete = async (productId) => {
@@ -259,7 +312,8 @@ export default function MyProducts() {
       )}
 
       {/* ── Products grid ── */}
-      {loading ? (
+      {/* Show auth-level spinner while session is still resolving */}
+      {(loading || authLoading) ? (
         <div className="flex items-center justify-center py-24">
           <Loader2 className="w-8 h-8 animate-spin text-brand-navy" />
         </div>
@@ -272,36 +326,57 @@ export default function MyProducts() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {products.map(p => {
-            const thumb = p.ProductPhoto?.[0]?.PhotoURL
+            // Safe fallbacks — every field might be null if schema/RLS differs
+            const thumb     = p?.ProductPhoto?.[0]?.PhotoURL ?? null
+            const title     = p?.Title     ?? 'Untitled'
+            const condition = p?.ItemCondition ?? '—'
+            const status    = p?.Status    ?? 'Unknown'
+            const views     = p?.ViewCount ?? 0
+            const productId = p?.ProductID
+
             return (
-              <div key={p.ProductID} className="card overflow-hidden">
+              <div key={productId} className="card overflow-hidden">
                 <div className="aspect-[4/3] bg-gray-100 overflow-hidden relative">
-                  {thumb
-                    ? <img src={thumb} alt={p.Title} className="w-full h-full object-cover" />
-                    : <div className="w-full h-full flex items-center justify-center text-gray-300"><ImageIcon className="w-8 h-8" /></div>
-                  }
+                  {thumb ? (
+                    <img
+                      src={thumb}
+                      alt={title}
+                      className="w-full h-full object-cover"
+                      onError={e => { e.target.style.display = 'none' }}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-gray-300">
+                      <ImageIcon className="w-8 h-8" />
+                    </div>
+                  )}
                   <div className="absolute top-2 left-2">
-                    <span className={STATUS_STYLE[p.Status] ?? 'badge-gray'}>{p.Status}</span>
+                    <span className={STATUS_STYLE[status] ?? 'badge-gray'}>{status}</span>
                   </div>
                 </div>
                 <div className="p-4">
-                  <p className="font-semibold text-gray-900 text-sm truncate">{p.Title}</p>
+                  <p className="font-semibold text-gray-900 text-sm truncate">{title}</p>
                   <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-500">
-                    <Tag className="w-3 h-3" />{p.ItemCondition}
+                    <Tag className="w-3 h-3" />{condition}
                     <span>·</span>
-                    <Eye className="w-3 h-3" />{p.ViewCount ?? 0} views
+                    <Eye className="w-3 h-3" />{views} views
                   </div>
                   <div className="flex gap-2 mt-3">
                     <button onClick={() => openEdit(p)} className="btn-outline btn-sm flex-1 gap-1">
                       <Pencil className="w-3.5 h-3.5" /> Edit
                     </button>
-                    <button onClick={() => handleDelete(p.ProductID)}
-                      className="btn-ghost btn-sm text-red-500 hover:bg-red-50 gap-1 px-3">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                    <Link to={`/product/${p.ProductID}`} className="btn-ghost btn-sm gap-1 px-3">
-                      <Eye className="w-3.5 h-3.5" />
-                    </Link>
+                    {productId && (
+                      <button
+                        onClick={() => handleDelete(productId)}
+                        className="btn-ghost btn-sm text-red-500 hover:bg-red-50 gap-1 px-3"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    {productId && (
+                      <Link to={`/product/${productId}`} className="btn-ghost btn-sm gap-1 px-3">
+                        <Eye className="w-3.5 h-3.5" />
+                      </Link>
+                    )}
                   </div>
                 </div>
               </div>

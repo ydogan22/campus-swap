@@ -23,71 +23,74 @@ export default function Messages() {
 
     const load = async () => {
       setLoading(true)
+      try {
+        /* All messages where I am sender or receiver */
+        const { data: msgs } = await supabase
+          .from('Message')
+          .select('MessageID, SenderID, ReceiverID, ProductID, Content, PhotoURL, SentAt')
+          .or(`SenderID.eq.${user.id},ReceiverID.eq.${user.id}`)
+          .order('SentAt', { ascending: false })
 
-      /* All messages where I am sender or receiver */
-      const { data: msgs } = await supabase
-        .from('Message')
-        .select('MessageID, SenderID, ReceiverID, ProductID, Content, PhotoURL, SentAt')
-        .or(`SenderID.eq.${user.id},ReceiverID.eq.${user.id}`)
-        .order('SentAt', { ascending: false })
-
-      /* Group by ProductID + other party */
-      const convMap = new Map()
-      for (const msg of msgs ?? []) {
-        const otherId  = msg.SenderID === user.id ? msg.ReceiverID : msg.SenderID
-        const key      = `${msg.ProductID}-${otherId}`
-        if (!convMap.has(key)) convMap.set(key, { productId: msg.ProductID, otherId, lastMsg: msg })
-      }
-
-      /* Enrich with product + user info */
-      const enriched = await Promise.all(
-        [...convMap.values()].map(async (c) => {
-          const [{ data: prod }, { data: other }] = await Promise.all([
-            supabase.from('Product').select('Title, OwnerID').eq('ProductID', c.productId).single(),
-            supabase.from('Users').select('Username').eq('UserID', c.otherId).single(),
-          ])
-          const sellerId = prod?.OwnerID
-          const buyerId  = sellerId === user.id ? c.otherId : user.id
-          return {
-            ...c,
-            productTitle:    prod?.Title ?? 'Unknown product',
-            sellerId,
-            buyerId,
-            sellerUsername:  sellerId === user.id ? (await supabase.from('Users').select('Username').eq('UserID', buyerId).single()).data?.Username : other?.Username,
-            otherUsername:   other?.Username ?? 'Unknown',
-          }
-        })
-      )
-
-      setConversations(enriched)
-
-      /* Auto-select from URL params */
-      if (initProductId && initSellerId) {
-        const match = enriched.find(
-          c => String(c.productId) === initProductId && c.sellerId === initSellerId
-        )
-        if (match) {
-          setSelected(match)
-        } else {
-          /* New conversation — fetch product info */
-          const [{ data: prod }, { data: seller }] = await Promise.all([
-            supabase.from('Product').select('Title, OwnerID').eq('ProductID', initProductId).single(),
-            supabase.from('Users').select('Username').eq('UserID', initSellerId).single(),
-          ])
-          setSelected({
-            productId:      Number(initProductId),
-            sellerId:       initSellerId,
-            buyerId:        user.id,
-            productTitle:   prod?.Title ?? 'Product',
-            sellerUsername: seller?.Username ?? 'Seller',
-            otherUsername:  seller?.Username ?? 'Seller',
-          })
+        /* Group by ProductID + other party */
+        const convMap = new Map()
+        for (const msg of msgs ?? []) {
+          const otherId  = msg.SenderID === user.id ? msg.ReceiverID : msg.SenderID
+          const key      = `${msg.ProductID}-${otherId}`
+          if (!convMap.has(key)) convMap.set(key, { productId: msg.ProductID, otherId, lastMsg: msg })
         }
-      } else if (enriched.length > 0) {
-        setSelected(enriched[0])
-      }
 
-      setLoading(false)
+        /* Enrich with product + user info */
+        const enriched = await Promise.all(
+          [...convMap.values()].map(async (c) => {
+            const [{ data: prod }, { data: other }] = await Promise.all([
+              supabase.from('Product').select('Title, OwnerID').eq('ProductID', c.productId).single(),
+              supabase.from('Users').select('Username').eq('UserID', c.otherId).single(),
+            ])
+            const sellerId = prod?.OwnerID
+            const buyerId  = sellerId === user.id ? c.otherId : user.id
+            return {
+              ...c,
+              productTitle:    prod?.Title ?? 'Unknown product',
+              sellerId,
+              buyerId,
+              sellerUsername:  sellerId === user.id ? (await supabase.from('Users').select('Username').eq('UserID', buyerId).single()).data?.Username : other?.Username,
+              otherUsername:   other?.Username ?? 'Unknown',
+            }
+          })
+        )
+
+        setConversations(enriched)
+
+        /* Auto-select from URL params */
+        if (initProductId && initSellerId) {
+          const match = enriched.find(
+            c => String(c.productId) === initProductId && c.sellerId === initSellerId
+          )
+          if (match) {
+            setSelected(match)
+          } else {
+            /* New conversation — fetch product info */
+            const [{ data: prod }, { data: seller }] = await Promise.all([
+              supabase.from('Product').select('Title, OwnerID').eq('ProductID', initProductId).single(),
+              supabase.from('Users').select('Username').eq('UserID', initSellerId).single(),
+            ])
+            setSelected({
+              productId:      Number(initProductId),
+              sellerId:       initSellerId,
+              buyerId:        user.id,
+              productTitle:   prod?.Title ?? 'Product',
+              sellerUsername: seller?.Username ?? 'Seller',
+              otherUsername:  seller?.Username ?? 'Seller',
+            })
+          }
+        } else if (enriched.length > 0) {
+          setSelected(enriched[0])
+        }
+      } catch (err) {
+        console.error('Messages load error:', err)
+      } finally {
+        setLoading(false)  // always clears the spinner
+      }
     }
     load()
   }, [user, initProductId, initSellerId])

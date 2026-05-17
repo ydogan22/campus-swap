@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import ProductCard from '../components/ProductCard'
@@ -19,7 +19,7 @@ export default function Home() {
   const [loading,         setLoading]         = useState(true)
   const [loadingMore,     setLoadingMore]     = useState(false)
   const [hasMore,         setHasMore]         = useState(false)
-  const [page,            setPage]            = useState(0)
+  const pageRef = useRef(0)          // tracks current page without being a dep
 
   const [selectedCats,   setSelectedCats]    = useState([])
   const [selectedStatus, setSelectedStatus]  = useState([])
@@ -34,50 +34,97 @@ export default function Home() {
     })
   }, [])
 
-  /* ── Build & run product query ── */
-  const fetchProducts = useCallback(async (reset = true) => {
-    const currentPage = reset ? 0 : page
+  /* ── Initial / filter-change fetch (runs once per filter change, never loops) ── */
+  useEffect(() => {
+    let cancelled = false
 
-    if (reset) setLoading(true)
-    else setLoadingMore(true)
+    const doFetch = async () => {
+      setLoading(true)
+      pageRef.current = 0
+
+      let q = supabase
+        .from('Product')
+        .select(`
+          ProductID, Title, ItemCondition, Status, ViewCount,
+          CategoryID,
+          Users ( Username, OverallRating ),
+          ProductPhoto ( PhotoURL )
+        `)
+        .range(0, PAGE_SIZE - 1)
+        .order('ProductID', { ascending: false })
+
+      if (query)                q = q.ilike('Title', `%${query}%`)
+      if (selectedCats.length)  q = q.in('CategoryID', selectedCats)
+      if (selectedStatus.length) q = q.in('Status', selectedStatus)
+
+      const { data, error } = await q
+      if (cancelled) return
+
+      if (error) {
+        console.error('[Home] Initial fetch error:', error)
+        setProducts([])
+        setHasMore(false)
+        setLoading(false)
+        return
+      }
+
+      const mapped = (data ?? []).map(p => ({
+        ...p,
+        thumbnail:      p.ProductPhoto?.[0]?.PhotoURL ?? null,
+        sellerUsername: p.Users?.Username ?? null,
+        sellerRating:   p.Users?.OverallRating ?? null,
+      }))
+
+      setProducts(mapped)
+      setHasMore((data ?? []).length === PAGE_SIZE)
+      pageRef.current = 1
+      setLoading(false)
+    }
+
+    doFetch()
+    return () => { cancelled = true }
+  }, [query, selectedCats, selectedStatus])   // ← stable primitives & arrays — no functions in deps
+
+  /* ── Load-more (button-triggered only, never via useEffect) ── */
+  const loadMore = async () => {
+    if (loadingMore) return
+    setLoadingMore(true)
+    const currentPage = pageRef.current
 
     let q = supabase
       .from('Product')
       .select(`
         ProductID, Title, ItemCondition, Status, ViewCount,
         CategoryID,
-        Users!Product_OwnerID_fkey ( Username, OverallRating ),
+        Users ( Username, OverallRating ),
         ProductPhoto ( PhotoURL )
       `)
       .range(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE - 1)
       .order('ProductID', { ascending: false })
 
-    if (query)               q = q.ilike('Title', `%${query}%`)
-    if (selectedCats.length) q = q.in('CategoryID', selectedCats)
+    if (query)                q = q.ilike('Title', `%${query}%`)
+    if (selectedCats.length)  q = q.in('CategoryID', selectedCats)
     if (selectedStatus.length) q = q.in('Status', selectedStatus)
 
     const { data, error } = await q
+    if (error) {
+      console.error('[Home] Load more error:', error)
+      setLoadingMore(false)
+      return
+    }
 
     const mapped = (data ?? []).map(p => ({
       ...p,
-      thumbnail:     p.ProductPhoto?.[0]?.PhotoURL ?? null,
+      thumbnail:      p.ProductPhoto?.[0]?.PhotoURL ?? null,
       sellerUsername: p.Users?.Username ?? null,
       sellerRating:   p.Users?.OverallRating ?? null,
     }))
 
-    if (reset) {
-      setProducts(mapped)
-      setPage(1)
-    } else {
-      setProducts(prev => [...prev, ...mapped])
-      setPage(p => p + 1)
-    }
+    setProducts(prev => [...prev, ...mapped])
     setHasMore((data ?? []).length === PAGE_SIZE)
-    setLoading(false)
+    pageRef.current = currentPage + 1
     setLoadingMore(false)
-  }, [query, selectedCats, selectedStatus, page])
-
-  useEffect(() => { fetchProducts(true) }, [query, selectedCats, selectedStatus])
+  }
 
   /* ── Toggle helpers ── */
   const toggleCat = (id) =>
@@ -245,7 +292,7 @@ export default function Home() {
                 <div className="mt-8 text-center">
                   <button
                     id="load-more-btn"
-                    onClick={() => fetchProducts(false)}
+                    onClick={loadMore}
                     disabled={loadingMore}
                     className="btn-outline"
                   >

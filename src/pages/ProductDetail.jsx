@@ -38,14 +38,19 @@ export default function ProductDetail() {
         .select(`
           ProductID, Title, Description, ItemCondition, Status, ViewCount,
           CategoryID,
-          Users!Product_OwnerID_fkey ( UserID, Username, OverallRating ),
+          Users ( UserID, Username, OverallRating ),
           Category ( CategoryName ),
           ProductPhoto ( PhotoID, PhotoURL )
         `)
         .eq('ProductID', productId)
         .single()
 
-      if (err || !data) { setError('Product not found.'); setLoading(false); return }
+      if (err || !data) {
+        console.error('[ProductDetail] fetch error:', err)
+        setError('Product not found.')
+        setLoading(false)
+        return
+      }
 
       setProduct(data)
       setPhotos(data.ProductPhoto ?? [])
