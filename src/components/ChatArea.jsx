@@ -4,8 +4,9 @@ import { useAuth } from '../context/AuthContext'
 import SwapModal from './SwapModal'
 import {
   Send, Paperclip, X, Image as ImageIcon, Loader2,
-  Lock, MapPin, CheckCheck, AlertCircle,
+  Lock, MapPin, CheckCheck, AlertCircle, Star
 } from 'lucide-react'
+import ReviewModal from './ReviewModal'
 
 const BUCKET = 'product-photos'
 
@@ -14,6 +15,10 @@ export default function ChatArea({ conversation }) {
   const { user } = useAuth()
 
   const [messages,       setMessages]       = useState([])
+  const [swapOffer,      setSwapOffer]      = useState(null)
+  const [productStatus,  setProductStatus]  = useState('Available')
+  const [hasReviewed,    setHasReviewed]    = useState(false)
+  const [reviewModal,    setReviewModal]    = useState(false)
   const [text,           setText]           = useState('')
   const [uploading,      setUploading]      = useState(false)
   const [sending,        setSending]        = useState(false)
@@ -29,20 +34,58 @@ export default function ChatArea({ conversation }) {
 
   const isSeller = user?.id === conversation?.sellerId
 
-  /* ── Load message history ── */
-  const loadMessages = useCallback(async () => {
+  /* ── Load message history & Swap offer ── */
+  const loadData = useCallback(async () => {
     if (!conversation) return
     const { productId, sellerId, buyerId } = conversation
 
-    const { data } = await supabase
-      .from('Message')
-      .select('MessageID, SenderID, Content, PhotoURL, SentAt')
-      .eq('ProductID', productId)
-      .or(`and(SenderID.eq.${sellerId},ReceiverID.eq.${buyerId}),and(SenderID.eq.${buyerId},ReceiverID.eq.${sellerId})`)
-      .order('SentAt', { ascending: true })
+    const [msgsRes, offerRes, prodRes] = await Promise.all([
+      supabase
+        .from('message')
+        .select('messageid, senderid, receiverid, content, photourl, sentat, isread')
+        .eq('productid', productId)
+        .or(`and(senderid.eq.${sellerId},receiverid.eq.${buyerId}),and(senderid.eq.${buyerId},receiverid.eq.${sellerId})`)
+        .order('sentat', { ascending: true }),
+      
+      supabase
+        .from('swapoffer')
+        .select('*')
+        .eq('targetproductid', productId)
+        .order('offerid', { ascending: false }),
 
-    setMessages(data ?? [])
-    return data ?? []
+      supabase
+        .from('product')
+        .select('status')
+        .eq('productid', productId)
+        .single()
+    ])
+
+    setMessages(msgsRes.data ?? [])
+    setProductStatus(prodRes.data?.status || 'Available')
+
+    // Filter the offer in JS to be bulletproof against null receiverid
+    const offers = offerRes.data ?? []
+    const relevantOffer = offers.find(o => 
+      (o.offererid === sellerId && o.receiverid === buyerId) || 
+      (o.offererid === buyerId && o.receiverid === sellerId) ||
+      (o.offererid === buyerId && !o.receiverid) // Fallback if receiverid is null in DB
+    )
+    setSwapOffer(relevantOffer || null)
+
+    // Check if user has already reviewed this specific swap offer
+    if (relevantOffer) {
+      const { data: revData } = await supabase
+        .from('review')
+        .select('reviewid')
+        .eq('offerid', relevantOffer.offerid)
+        .eq('reviewerid', user.id)
+        .maybeSingle()
+      setHasReviewed(!!revData)
+    } else {
+      setHasReviewed(false)
+    }
+    
+    return msgsRes.data ?? []
   }, [conversation])
 
   /* ── Check one-time restriction ── */
@@ -52,11 +95,11 @@ export default function ChatArea({ conversation }) {
     const { productId, sellerId, buyerId } = conversation
 
     // Has buyer sent any message?
-    const buyerSent = msgs.some(m => m.SenderID === buyerId)
+    const buyerSent = msgs.some(m => m.senderid === buyerId)
     if (!buyerSent) { setRestricted(false); return }
 
     // Has seller replied?
-    const sellerReplied = msgs.some(m => m.SenderID === sellerId)
+    const sellerReplied = msgs.some(m => m.senderid === sellerId)
     setRestricted(!sellerReplied)
   }, [conversation, isSeller])
 
@@ -64,36 +107,110 @@ export default function ChatArea({ conversation }) {
   useEffect(() => {
     if (!conversation) return
 
-    loadMessages().then(msgs => checkRestriction(msgs ?? []))
+    loadData().then(msgs => {
+      checkRestriction(msgs ?? [])
+    })
 
-    /* Unsubscribe from previous channel */
-    if (channelRef.current) supabase.removeChannel(channelRef.current)
+    /* Unsubscribe from previous channels */
+    if (channelRef.current) {
+      channelRef.current.forEach(c => supabase.removeChannel(c))
+    }
 
-    const channel = supabase
-      .channel(`messages-${conversation.productId}`)
+    /* Channel 1: Messages */
+    const msgChannel = supabase
+      .channel(`msg-room-${conversation.productId}`)
       .on(
         'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'Message',
-          filter: `ProductID=eq.${conversation.productId}`,
-        },
+        { event: 'INSERT', schema: 'public', table: 'message', filter: `productid=eq.${conversation.productId}` },
         (payload) => {
           setMessages(prev => {
-            const exists = prev.some(m => m.MessageID === payload.new.MessageID)
-            if (exists) return prev
+            if (prev.some(m => m.messageid === payload.new.messageid)) return prev
             const next = [...prev, payload.new]
             checkRestriction(next)
             return next
           })
         }
       )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'message', filter: `productid=eq.${conversation.productId}` },
+        (payload) => {
+          setMessages(prev => prev.map(m => m.messageid === payload.new.messageid ? payload.new : m))
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') console.log('Message channel subscribed!')
+      })
+
+    /* Channel 2: Swap Offers */
+    const offerChannel = supabase
+      .channel(`offer-room-${conversation.productId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'swapoffer', filter: `targetproductid=eq.${conversation.productId}` },
+        (payload) => {
+          const { sellerId, buyerId } = conversation
+          const o = payload.new
+          if (
+            (o.offererid === sellerId && o.receiverid === buyerId) || 
+            (o.offererid === buyerId && o.receiverid === sellerId) ||
+            (o.offererid === buyerId && !o.receiverid)
+          ) {
+            setSwapOffer(o)
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'swapoffer', filter: `targetproductid=eq.${conversation.productId}` },
+        (payload) => {
+          const { sellerId, buyerId } = conversation
+          const o = payload.new
+          if (
+            (o.offererid === sellerId && o.receiverid === buyerId) || 
+            (o.offererid === buyerId && o.receiverid === sellerId) ||
+            (o.offererid === buyerId && !o.receiverid)
+          ) {
+            setSwapOffer(o)
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') console.log('Offer channel subscribed!')
+      })
+
+    /* Channel 3: Product updates */
+    const prodChannel = supabase
+      .channel(`prod-room-${conversation.productId}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'product', filter: `productid=eq.${conversation.productId}` },
+        (payload) => {
+          setProductStatus(payload.new.status)
+        }
+      )
       .subscribe()
 
-    channelRef.current = channel
-    return () => supabase.removeChannel(channel)
-  }, [conversation])
+    channelRef.current = [msgChannel, offerChannel, prodChannel]
+    
+    return () => {
+      supabase.removeChannel(msgChannel)
+      supabase.removeChannel(offerChannel)
+      supabase.removeChannel(prodChannel)
+    }
+  }, [conversation, loadData, checkRestriction])
+
+  /* ── Auto mark as read ── */
+  useEffect(() => {
+    if (!user || messages.length === 0) return
+    const unreadIds = messages.filter(m => m.isread === false && m.receiverid === user.id).map(m => m.messageid)
+    
+    if (unreadIds.length > 0) {
+      supabase.from('message').update({ isread: true }).in('messageid', unreadIds).then(() => {
+        setMessages(prev => prev.map(m => unreadIds.includes(m.messageid) ? { ...m, isread: true } : m))
+      })
+    }
+  }, [messages, user])
 
   /* Auto-scroll to bottom */
   useEffect(() => {
@@ -139,13 +256,13 @@ export default function ChatArea({ conversation }) {
 
     const receiverId = isSeller ? conversation.buyerId : conversation.sellerId
 
-    const { error: msgErr } = await supabase.from('Message').insert({
-      SenderID:   user.id,
-      ReceiverID: receiverId,
-      ProductID:  conversation.productId,
-      Content:    text.trim() || null,
-      PhotoURL:   photoUrl,
-      SentAt:     new Date().toISOString(),
+    const { error: msgErr } = await supabase.from('message').insert({
+      senderid:   user.id,
+      receiverid: receiverId,
+      productid:  conversation.productId,
+      content:    text.trim() || null,
+      photourl:   photoUrl,
+      sentat:     new Date().toISOString(),
     })
 
     if (msgErr) { setError(msgErr.message) }
@@ -156,11 +273,53 @@ export default function ChatArea({ conversation }) {
     setSending(false)
   }
 
+  /* ── Swap Offer Actions ── */
+  const handleOfferAction = async (offerId, newStatus) => {
+    try {
+      let newProductStatus = null
+      let newOfferStatus = newStatus
+
+      if (newStatus === 'Sold') {
+        newProductStatus = 'Sold'
+        newOfferStatus = 'Completed'
+      } else if (newStatus === 'Accepted') {
+        newProductStatus = 'Pending' // UI displays this as Proposed
+      } else if (newStatus === 'Canceled' || newStatus === 'Declined') {
+        newProductStatus = 'Available'
+      }
+
+      const { error: offerErr } = await supabase
+        .from('swapoffer')
+        .update({ offerstatus: newOfferStatus })
+        .eq('offerid', offerId)
+        
+      if (offerErr) throw offerErr
+
+      // Optimistically update the UI immediately
+      setSwapOffer(prev => prev && prev.offerid === offerId ? { ...prev, offerstatus: newOfferStatus } : prev)
+
+      // Only update product status if it's changing
+      if (newProductStatus) {
+        const { error: prodErr } = await supabase
+          .from('product')
+          .update({ status: newProductStatus })
+          .eq('productid', conversation.productId)
+          
+        if (prodErr) throw prodErr
+      }
+    } catch (err) {
+      alert('Failed to update offer: ' + err.message)
+    }
+  }
+
   /* ── Format time ── */
   const fmt = (iso) => {
     const d = new Date(iso)
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
+
+  const isSold = productStatus === 'Sold'
+  const hasActiveOffer = swapOffer && ['Pending', 'Accepted', 'Completed'].includes(swapOffer.offerstatus)
 
   if (!conversation) return (
     <div className="flex-1 flex items-center justify-center text-gray-400">
@@ -190,12 +349,78 @@ export default function ChatArea({ conversation }) {
         <button
           id="propose-swap-btn"
           onClick={() => setSwapModal(true)}
-          className="btn-outline btn-sm shrink-0 flex items-center gap-1.5"
+          disabled={!user || hasActiveOffer || isSold}
+          title={isSold ? "Product is already sold" : hasActiveOffer ? "An offer is already active or completed" : "Suggest a meeting point"}
+          className="btn-outline btn-sm shrink-0 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:text-gray-400"
         >
           <MapPin className="w-3.5 h-3.5" />
           Propose Swap &amp; Meet
         </button>
       </div>
+
+      {/* ── Swap Offer Banner ── */}
+      {swapOffer && (
+        <div className="shrink-0 bg-white border-b border-surface-border px-5 py-3 shadow-sm z-10 relative animate-fade-in">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <MapPin className="w-5 h-5 text-brand-navy" />
+              <h3 className="font-semibold text-gray-900 text-sm">
+                Swap Offer: {swapOffer.meetingpoint}
+              </h3>
+              <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full font-bold ml-auto ${
+                swapOffer.offerstatus === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
+                swapOffer.offerstatus === 'Accepted' ? 'bg-green-100 text-green-800' :
+                swapOffer.offerstatus === 'Completed' ? 'bg-blue-100 text-blue-800' :
+                'bg-red-100 text-red-800'
+              }`}>
+                {swapOffer.offerstatus}
+              </span>
+            </div>
+            
+            <p className="text-xs text-gray-500">
+              Proposed by <strong className="text-gray-700">{swapOffer.offererid === user?.id ? 'You' : conversation.otherUsername}</strong>
+            </p>
+            
+            {swapOffer.offerstatus === 'Pending' && swapOffer.receiverid === user?.id && (
+              <div className="flex gap-2 mt-2">
+                <button onClick={() => handleOfferAction(swapOffer.offerid, 'Accepted')} className="btn-primary btn-sm flex-1">Accept</button>
+                <button onClick={() => handleOfferAction(swapOffer.offerid, 'Declined')} className="btn-outline btn-sm flex-1 text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300">Decline</button>
+              </div>
+            )}
+
+            {swapOffer.offerstatus === 'Pending' && swapOffer.offererid === user?.id && (
+              <div className="flex gap-2 mt-2">
+                <button onClick={() => handleOfferAction(swapOffer.offerid, 'Withdrawn')} className="btn-outline btn-sm flex-1 text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300">Cancel Request</button>
+              </div>
+            )}
+
+            {swapOffer.offerstatus === 'Accepted' && (
+              <div className="flex gap-2 mt-2">
+                {isSeller && (
+                  <button onClick={() => handleOfferAction(swapOffer.offerid, 'Sold')} className="btn-primary btn-sm flex-1 bg-green-600 hover:bg-green-700 border-none">Mark as Sold</button>
+                )}
+                <button onClick={() => handleOfferAction(swapOffer.offerid, 'Canceled')} className="btn-outline btn-sm flex-1 text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300">Cancel Offer</button>
+              </div>
+            )}
+
+            {(swapOffer.offerstatus === 'Completed' || swapOffer.offerstatus === 'Canceled') && !hasReviewed && (
+              <div className="flex gap-2 mt-2 pt-2 border-t border-gray-100">
+                <button onClick={() => setReviewModal(true)} className="btn-primary btn-sm flex-1 bg-yellow-500 hover:bg-yellow-600 border-none text-white shadow-md flex items-center justify-center gap-1.5">
+                  <Star className="w-3.5 h-3.5 fill-current" /> Leave a Review
+                </button>
+              </div>
+            )}
+
+            {(swapOffer.offerstatus === 'Completed' || swapOffer.offerstatus === 'Canceled') && hasReviewed && (
+              <div className="flex gap-2 mt-2 pt-2 border-t border-gray-100">
+                <div className="text-xs text-green-700 font-medium bg-green-50 w-full text-center py-1.5 rounded-lg border border-green-200 flex items-center justify-center gap-1">
+                  <CheckCheck className="w-3.5 h-3.5" /> You reviewed this swap
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Messages ── */}
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 bg-surface">
@@ -206,9 +431,9 @@ export default function ChatArea({ conversation }) {
         )}
 
         {messages.map((msg) => {
-          const isMe = msg.SenderID === user?.id
+          const isMe = msg.senderid === user?.id
           return (
-            <div key={msg.MessageID}
+            <div key={msg.messageid}
               className={`flex ${isMe ? 'justify-end' : 'justify-start'} animate-fade-in`}
             >
               <div className={`max-w-[72%] rounded-2xl px-4 py-2.5 shadow-sm
@@ -217,23 +442,25 @@ export default function ChatArea({ conversation }) {
                   : 'bg-white text-gray-800 border border-surface-border rounded-bl-sm'
                 }`}
               >
-                {msg.PhotoURL && (
-                  <a href={msg.PhotoURL} target="_blank" rel="noopener noreferrer">
+                {msg.photourl && (
+                  <a href={msg.photourl} target="_blank" rel="noopener noreferrer">
                     <img
-                      src={msg.PhotoURL}
+                      src={msg.photourl}
                       alt="attachment"
                       className="rounded-xl mb-2 max-w-full max-h-64 object-cover"
                     />
                   </a>
                 )}
-                {msg.Content && (
-                  <p className="text-sm leading-relaxed whitespace-pre-line">{msg.Content}</p>
+                {msg.content && (
+                  <p className="text-sm leading-relaxed whitespace-pre-line">{msg.content}</p>
                 )}
                 <div className={`flex items-center gap-1 mt-1 ${isMe ? 'justify-end' : 'justify-start'}`}>
                   <span className={`text-[10px] ${isMe ? 'text-white/60' : 'text-gray-400'}`}>
-                    {fmt(msg.SentAt)}
+                    {fmt(msg.sentat)}
                   </span>
-                  {isMe && <CheckCheck className="w-3 h-3 text-white/60" />}
+                  {isMe && (
+                    msg.isread ? <CheckCheck className="w-3.5 h-3.5 text-blue-300" /> : <CheckCheck className="w-3 h-3 text-white/50" />
+                  )}
                 </div>
               </div>
             </div>
@@ -277,8 +504,8 @@ export default function ChatArea({ conversation }) {
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
-          disabled={restricted}
-          className="btn-ghost p-2 rounded-xl shrink-0 disabled:opacity-40"
+          disabled={restricted || isSold}
+          className="btn-ghost p-2 rounded-xl shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
           title="Attach image"
         >
           <Paperclip className="w-5 h-5" />
@@ -295,13 +522,13 @@ export default function ChatArea({ conversation }) {
         <textarea
           id="chat-input"
           rows={1}
-          placeholder={restricted ? 'Waiting for seller to reply…' : 'Type a message…'}
+          placeholder={isSold ? 'Product is sold. Chat is closed.' : restricted ? 'Waiting for seller to reply…' : 'Type a message…'}
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e) }
           }}
-          disabled={restricted}
+          disabled={restricted || isSold}
           className="input flex-1 resize-none py-2.5 min-h-[42px] max-h-32 disabled:bg-gray-50 disabled:text-gray-400 transition-all"
           style={{ overflowY: 'auto' }}
         />
@@ -310,7 +537,7 @@ export default function ChatArea({ conversation }) {
         <button
           id="send-message-btn"
           type="submit"
-          disabled={restricted || sending || (!text.trim() && !imageFile)}
+          disabled={restricted || sending || isSold || (!text.trim() && !imageFile)}
           className="btn-primary p-2.5 rounded-xl shrink-0 disabled:opacity-40"
         >
           {sending || uploading
@@ -324,8 +551,24 @@ export default function ChatArea({ conversation }) {
       {swapModal && (
         <SwapModal
           productId={conversation.productId}
+          receiverId={isSeller ? conversation.buyerId : conversation.sellerId}
           onClose={() => setSwapModal(false)}
           onSuccess={() => setSwapModal(false)}
+        />
+      )}
+
+      {/* ── Review Modal ── */}
+      {reviewModal && swapOffer && (
+        <ReviewModal
+          isOpen={reviewModal}
+          onClose={() => setReviewModal(false)}
+          revieweeId={isSeller ? conversation.buyerId : conversation.sellerId}
+          revieweeName={conversation.otherUsername}
+          offerId={swapOffer.offerid}
+          reviewerId={user.id}
+          onReviewSubmitted={() => {
+            setHasReviewed(true)
+          }}
         />
       )}
     </div>

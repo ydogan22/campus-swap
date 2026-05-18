@@ -3,7 +3,7 @@ import { supabase } from '../supabaseClient'
 import { useAuth } from '../context/AuthContext'
 import { MapPin, X, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
 
-export default function SwapModal({ productId, onClose, onSuccess }) {
+export default function SwapModal({ productId, receiverId, onClose, onSuccess }) {
   const { user } = useAuth()
 
   const [meetingPoint, setMeetingPoint] = useState('')
@@ -19,23 +19,16 @@ export default function SwapModal({ productId, onClose, onSuccess }) {
 
     /* Insert SwapOffer */
     const { error: offerErr } = await supabase
-      .from('SwapOffer')
+      .from('swapoffer')
       .insert({
-        TargetProductID: productId,
-        OffererID:       user.id,
-        MeetingPoint:    meetingPoint.trim(),
-        OfferStatus:     'Pending',
+        targetproductid: productId,
+        offererid:       user.id,
+        receiverid:      receiverId,
+        meetingpoint:    meetingPoint.trim(),
+        offerstatus:     'Pending',
       })
 
     if (offerErr) { setError(offerErr.message); setLoading(false); return }
-
-    /* Update Product Status → Pending */
-    const { error: updateErr } = await supabase
-      .from('Product')
-      .update({ Status: 'Pending' })
-      .eq('ProductID', productId)
-
-    if (updateErr) { setError(updateErr.message); setLoading(false); return }
 
     setLoading(false)
     setDone(true)
@@ -72,13 +65,13 @@ export default function SwapModal({ productId, onClose, onSuccess }) {
               <CheckCircle className="w-14 h-14 text-green-500" />
               <p className="font-semibold text-gray-900 text-center">Swap offer sent!</p>
               <p className="text-sm text-gray-500 text-center">
-                The seller has been notified. The product is now marked as <strong>Pending</strong>.
+                The other party will be notified. Once accepted, the product will be marked as Pending.
               </p>
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-5">
               <div className="bg-brand-light border border-brand-navy/10 rounded-xl p-4 text-sm text-brand-navy">
-                <strong>How it works:</strong> You propose a meeting point on campus. Once the seller accepts, 
+                <strong>How it works:</strong> You propose a meeting point on campus. Once accepted by the other party, 
                 the swap is confirmed and the item is marked as Pending.
               </div>
 

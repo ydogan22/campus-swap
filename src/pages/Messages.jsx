@@ -26,35 +26,35 @@ export default function Messages() {
       try {
         /* All messages where I am sender or receiver */
         const { data: msgs } = await supabase
-          .from('Message')
-          .select('MessageID, SenderID, ReceiverID, ProductID, Content, PhotoURL, SentAt')
-          .or(`SenderID.eq.${user.id},ReceiverID.eq.${user.id}`)
-          .order('SentAt', { ascending: false })
+          .from('message')
+          .select('messageid, senderid, receiverid, productid, content, photourl, sentat')
+          .or(`senderid.eq.${user.id},receiverid.eq.${user.id}`)
+          .order('sentat', { ascending: false })
 
         /* Group by ProductID + other party */
         const convMap = new Map()
         for (const msg of msgs ?? []) {
-          const otherId  = msg.SenderID === user.id ? msg.ReceiverID : msg.SenderID
-          const key      = `${msg.ProductID}-${otherId}`
-          if (!convMap.has(key)) convMap.set(key, { productId: msg.ProductID, otherId, lastMsg: msg })
+          const otherId  = msg.senderid === user.id ? msg.receiverid : msg.senderid
+          const key      = `${msg.productid}-${otherId}`
+          if (!convMap.has(key)) convMap.set(key, { productId: msg.productid, otherId, lastMsg: msg })
         }
 
         /* Enrich with product + user info */
         const enriched = await Promise.all(
           [...convMap.values()].map(async (c) => {
             const [{ data: prod }, { data: other }] = await Promise.all([
-              supabase.from('Product').select('Title, OwnerID').eq('ProductID', c.productId).single(),
-              supabase.from('Users').select('Username').eq('UserID', c.otherId).single(),
+              supabase.from('product').select('title, ownerid').eq('productid', c.productId).single(),
+              supabase.from('users').select('username').eq('userid', c.otherId).single(),
             ])
-            const sellerId = prod?.OwnerID
+            const sellerId = prod?.ownerid
             const buyerId  = sellerId === user.id ? c.otherId : user.id
             return {
               ...c,
-              productTitle:    prod?.Title ?? 'Unknown product',
+              productTitle:    prod?.title ?? 'Unknown product',
               sellerId,
               buyerId,
-              sellerUsername:  sellerId === user.id ? (await supabase.from('Users').select('Username').eq('UserID', buyerId).single()).data?.Username : other?.Username,
-              otherUsername:   other?.Username ?? 'Unknown',
+              sellerUsername:  sellerId === user.id ? (await supabase.from('users').select('username').eq('userid', buyerId).single()).data?.username : other?.username,
+              otherUsername:   other?.username ?? 'Unknown',
             }
           })
         )
@@ -71,16 +71,16 @@ export default function Messages() {
           } else {
             /* New conversation — fetch product info */
             const [{ data: prod }, { data: seller }] = await Promise.all([
-              supabase.from('Product').select('Title, OwnerID').eq('ProductID', initProductId).single(),
-              supabase.from('Users').select('Username').eq('UserID', initSellerId).single(),
+              supabase.from('product').select('title, ownerid').eq('productid', initProductId).single(),
+              supabase.from('users').select('username').eq('userid', initSellerId).single(),
             ])
             setSelected({
               productId:      Number(initProductId),
               sellerId:       initSellerId,
               buyerId:        user.id,
-              productTitle:   prod?.Title ?? 'Product',
-              sellerUsername: seller?.Username ?? 'Seller',
-              otherUsername:  seller?.Username ?? 'Seller',
+              productTitle:   prod?.title ?? 'Product',
+              sellerUsername: seller?.username ?? 'Seller',
+              otherUsername:  seller?.username ?? 'Seller',
             })
           }
         } else if (enriched.length > 0) {
@@ -155,11 +155,11 @@ export default function Messages() {
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-baseline">
                       <span className="text-sm font-semibold text-gray-900 truncate">{c.otherUsername}</span>
-                      <span className="text-[10px] text-gray-400 shrink-0 ml-1">{fmt(c.lastMsg?.SentAt)}</span>
+                      <span className="text-[10px] text-gray-400 shrink-0 ml-1">{fmt(c.lastMsg?.sentat)}</span>
                     </div>
                     <p className="text-xs text-gray-500 truncate mt-0.5">{c.productTitle}</p>
                     <p className="text-xs text-gray-400 truncate mt-0.5">
-                      {c.lastMsg?.Content ?? (c.lastMsg?.PhotoURL ? '📷 Photo' : '')}
+                      {c.lastMsg?.content ?? (c.lastMsg?.photourl ? '📷 Photo' : '')}
                     </p>
                   </div>
                 </button>

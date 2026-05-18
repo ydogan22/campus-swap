@@ -1,0 +1,42 @@
+table_name,column_name,data_type
+category,categoryid,integer
+category,categoryname,character varying
+message,messageid,integer
+message,senderid,uuid
+message,receiverid,uuid
+message,productid,integer
+message,content,text
+message,photourl,character varying
+message,sentat,timestamp without time zone
+product,productid,integer
+product,ownerid,uuid
+product,categoryid,integer
+product,title,character varying
+product,description,text
+product,itemcondition,character varying
+product,status,character varying
+product,viewcount,integer
+product,creationdate,timestamp without time zone
+productphoto,photoid,integer
+productphoto,productid,integer
+productphoto,photourl,character varying
+review,reviewid,integer
+review,reviewerid,uuid
+review,revieweeid,uuid
+review,offerid,integer
+review,rating,integer
+review,comment,text
+review,reviewdate,timestamp without time zone
+swapoffer,offerid,integer
+swapoffer,targetproductid,integer
+swapoffer,offererid,uuid
+swapoffer,meetingpoint,character varying
+swapoffer,offerstatus,character varying
+swapoffer,offerdate,timestamp without time zone
+swapoffer,lastupdateddate,timestamp without time zone
+users,userid,uuid
+users,kumail,character varying
+users,passwordhash,character varying
+users,username,character varying
+users,overallrating,double precision
+users,registrationdate,timestamp without time zone

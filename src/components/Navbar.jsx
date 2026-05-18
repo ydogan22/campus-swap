@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { supabase } from '../supabaseClient'
 import {
   Search, MessageSquare, Package, User, LogOut,
   ChevronDown, Menu, X, Bell,
@@ -15,6 +16,49 @@ export default function Navbar() {
   const [menuOpen,    setMenuOpen]    = useState(false)
   const [dropOpen,    setDropOpen]    = useState(false)
   const dropRef = useRef(null)
+
+  const [unreadCount, setUnreadCount] = useState(0)
+
+  /* Fetch unread message count & subscribe to realtime changes */
+  useEffect(() => {
+    if (!user) {
+      setUnreadCount(0)
+      return
+    }
+
+    const fetchUnreadCount = async () => {
+      try {
+        const { count, error } = await supabase
+          .from('message')
+          .select('*', { count: 'exact', head: true })
+          .eq('receiverid', user.id)
+          .eq('isread', false)
+        
+        if (error) throw error
+        setUnreadCount(count ?? 0)
+      } catch (err) {
+        console.error('Error fetching unread count:', err)
+      }
+    }
+
+    fetchUnreadCount()
+
+    // Realtime channel to listen to any incoming messages
+    const channel = supabase
+      .channel(`navbar-unread-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'message', filter: `receiverid=eq.${user.id}` },
+        () => {
+          fetchUnreadCount()
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [user])
 
   /* Close dropdown on outside click */
   useEffect(() => {
@@ -68,9 +112,14 @@ export default function Navbar() {
         {user ? (
           <nav className="hidden md:flex items-center gap-1">
             <Link to="/messages" id="nav-messages"
-              className="btn-ghost btn-sm flex gap-1.5 items-center">
+              className="btn-ghost btn-sm flex gap-1.5 items-center relative">
               <MessageSquare className="w-4 h-4" />
               <span>Messages</span>
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1.5 bg-brand-crimson text-white text-[9px] font-black h-4 min-w-[16px] px-1 rounded-full flex items-center justify-center animate-pulse border border-white shadow-sm">
+                  {unreadCount}
+                </span>
+              )}
             </Link>
             <Link to="/my-products" id="nav-my-products"
               className="btn-ghost btn-sm flex gap-1.5 items-center">
@@ -144,7 +193,16 @@ export default function Navbar() {
             </form>
             {user ? (
               <>
-                <Link to="/messages"    onClick={() => setMenuOpen(false)} className="flex items-center gap-2 text-sm font-medium text-gray-700 py-2"><MessageSquare className="w-4 h-4" /> Messages</Link>
+                <Link to="/messages" onClick={() => setMenuOpen(false)} className="flex items-center justify-between gap-2 text-sm font-medium text-gray-700 py-2">
+                  <span className="flex items-center gap-2">
+                    <MessageSquare className="w-4 h-4" /> Messages
+                  </span>
+                  {unreadCount > 0 && (
+                    <span className="bg-brand-crimson text-white text-[10px] font-black h-5 min-w-[20px] px-1.5 rounded-full flex items-center justify-center">
+                      {unreadCount}
+                    </span>
+                  )}
+                </Link>
                 <Link to="/my-products" onClick={() => setMenuOpen(false)} className="flex items-center gap-2 text-sm font-medium text-gray-700 py-2"><Package className="w-4 h-4" /> My Products</Link>
                 <Link to="/profile"     onClick={() => setMenuOpen(false)} className="flex items-center gap-2 text-sm font-medium text-gray-700 py-2"><User className="w-4 h-4" /> Profile</Link>
                 <button onClick={() => { signOut(); setMenuOpen(false) }} className="flex items-center gap-2 text-sm font-medium text-red-600 py-2"><LogOut className="w-4 h-4" /> Sign Out</button>

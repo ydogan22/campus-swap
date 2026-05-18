@@ -34,15 +34,15 @@ export default function ProductDetail() {
       setLoading(true)
 
       const { data, error: err } = await supabase
-        .from('Product')
+        .from('product')
         .select(`
-          ProductID, Title, Description, ItemCondition, Status, ViewCount,
-          CategoryID,
-          Users ( UserID, Username, OverallRating ),
-          Category ( CategoryName ),
-          ProductPhoto ( PhotoID, PhotoURL )
+          productid, title, description, itemcondition, status, viewcount,
+          categoryid,
+          users ( userid, username, overallrating ),
+          category ( categoryname ),
+          productphoto ( photoid, photourl )
         `)
-        .eq('ProductID', productId)
+        .eq('productid', productId)
         .single()
 
       if (err || !data) {
@@ -53,13 +53,13 @@ export default function ProductDetail() {
       }
 
       setProduct(data)
-      setPhotos(data.ProductPhoto ?? [])
+      setPhotos(data.productphoto ?? [])
 
       /* Increment view count */
       await supabase
-        .from('Product')
-        .update({ ViewCount: (data.ViewCount ?? 0) + 1 })
-        .eq('ProductID', productId)
+        .from('product')
+        .update({ viewcount: (data.viewcount ?? 0) + 1 })
+        .eq('productid', productId)
 
       setLoading(false)
     }
@@ -80,7 +80,7 @@ export default function ProductDetail() {
 
   const handleContact = () => {
     if (!user) { navigate('/login'); return }
-    navigate(`/messages?productId=${productId}&sellerId=${product.Users?.UserID}`)
+    navigate(`/messages?productId=${productId}&sellerId=${product.users?.userid}`)
   }
 
   /* ── Stars render ── */
@@ -112,9 +112,9 @@ export default function ProductDetail() {
     </div>
   )
 
-  const currentPhoto = photos[photoIdx]?.PhotoURL ?? PLACEHOLDER
-  const isSeller     = user?.id === product.Users?.UserID
-  const isAvailable  = product.Status === 'Available'
+  const currentPhoto = photos[photoIdx]?.photourl ?? PLACEHOLDER
+  const isSeller     = user?.id === product.users?.userid
+  const isAvailable  = product.status === 'Available'
 
   return (
     <div className="page-container animate-fade-in">
@@ -172,10 +172,10 @@ export default function ProductDetail() {
           {photos.length > 1 && (
             <div className="flex gap-2 mt-3 overflow-x-auto pb-1">
               {photos.map((ph, i) => (
-                <button key={ph.PhotoID} onClick={() => setPhotoIdx(i)}
+                <button key={ph.photoid} onClick={() => setPhotoIdx(i)}
                   className={`shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all
                     ${i === photoIdx ? 'border-brand-navy' : 'border-transparent opacity-60 hover:opacity-100'}`}>
-                  <img src={ph.PhotoURL} alt="" className="w-full h-full object-cover"
+                  <img src={ph.photourl} alt="" className="w-full h-full object-cover"
                     onError={e => { e.target.src = PLACEHOLDER }} />
                 </button>
               ))}
@@ -187,33 +187,35 @@ export default function ProductDetail() {
         <div className="flex flex-col gap-5">
           {/* Status + Category */}
           <div className="flex items-center gap-2 flex-wrap">
-            <span className={STATUS_STYLE[product.Status] ?? 'badge-gray'}>{product.Status}</span>
-            {product.Category?.CategoryName && (
+            <span className={STATUS_STYLE[product.status] ?? 'badge-gray'}>
+              {product.status === 'Pending' ? 'Proposed' : product.status}
+            </span>
+            {product.category?.categoryname && (
               <span className="badge badge-blue">
-                <Tag className="w-2.5 h-2.5" />{product.Category.CategoryName}
+                <Tag className="w-2.5 h-2.5" />{product.category.categoryname}
               </span>
             )}
             <div className="flex items-center gap-1 ml-auto text-xs text-gray-400">
-              <Eye className="w-3.5 h-3.5" /> {product.ViewCount ?? 0} views
+              <Eye className="w-3.5 h-3.5" /> {product.viewcount ?? 0} views
             </div>
           </div>
 
-          <h1 className="text-3xl font-extrabold text-gray-900 leading-tight">{product.Title}</h1>
+          <h1 className="text-3xl font-extrabold text-gray-900 leading-tight">{product.title}</h1>
 
           {/* Condition */}
           <div className="flex items-center gap-2">
             <span className="text-sm text-gray-500">Condition:</span>
-            <span className={CONDITION_STYLE[product.ItemCondition] ?? 'badge-gray'}>
-              {product.ItemCondition}
+            <span className={CONDITION_STYLE[product.itemcondition] ?? 'badge-gray'}>
+              {product.itemcondition}
             </span>
           </div>
 
           {/* Description */}
-          {product.Description && (
+          {product.description && (
             <div>
               <h2 className="text-sm font-semibold text-gray-700 mb-1.5">Description</h2>
               <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-line">
-                {product.Description}
+                {product.description}
               </p>
             </div>
           )}
@@ -221,12 +223,12 @@ export default function ProductDetail() {
           {/* Seller card */}
           <div className="card p-4 flex items-center gap-4">
             <span className="avatar w-12 h-12 text-base shrink-0">
-              {product.Users?.Username?.slice(0, 2).toUpperCase() ?? '??'}
+              {product.users?.username?.slice(0, 2).toUpperCase() ?? '??'}
             </span>
             <div className="flex-1 min-w-0">
               <p className="text-xs text-gray-500 mb-0.5">Listed by</p>
-              <p className="font-semibold text-gray-900 truncate">{product.Users?.Username ?? 'Unknown'}</p>
-              <Stars rating={product.Users?.OverallRating} />
+              <p className="font-semibold text-gray-900 truncate">{product.users?.username ?? 'Unknown'}</p>
+              <Stars rating={product.users?.overallrating} />
             </div>
             <User2 className="w-5 h-5 text-gray-300 shrink-0" />
           </div>

@@ -6,13 +6,73 @@ import { User, Mail, Star, Lock, Save, Loader2, CheckCircle, AlertCircle, Eye, E
 export default function Profile() {
   const { user, profile, refreshProfile } = useAuth()
 
-  const [username,    setUsername]    = useState(profile?.Username ?? '')
+  const [username,    setUsername]    = useState(profile?.username ?? '')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPass, setConfirmPass] = useState('')
   const [showPass,    setShowPass]    = useState(false)
   const [saving,      setSaving]      = useState(false)
   const [error,       setError]       = useState('')
   const [success,     setSuccess]     = useState('')
+
+  // Reviews collapsible state
+  const [reviews,        setReviews]        = useState([])
+  const [reviewsLoading, setReviewsLoading] = useState(false)
+  const [showReviews,    setShowReviews]    = useState(false)
+
+  // Sync local state when profile is loaded asynchronously
+  React.useEffect(() => {
+    if (profile?.username) {
+      setUsername(profile.username)
+    }
+  }, [profile?.username])
+
+  const fetchReviews = async () => {
+    if (!user) return
+    setReviewsLoading(true)
+    try {
+      const { data: revs, error: revErr } = await supabase
+        .from('review')
+        .select('*')
+        .eq('revieweeid', user.id)
+        .order('reviewdate', { ascending: false })
+
+      if (revErr) throw revErr
+
+      if (revs && revs.length > 0) {
+        // Fetch usernames of reviewers in a single query
+        const reviewerIds = [...new Set(revs.map(r => r.reviewerid))]
+        const { data: usersData, error: usersErr } = await supabase
+          .from('users')
+          .select('userid, username')
+          .in('userid', reviewerIds)
+
+        if (usersErr) throw usersErr
+
+        const usersMap = {}
+        ;(usersData ?? []).forEach(u => {
+          usersMap[u.userid] = u.username
+        })
+
+        const mappedReviews = revs.map(r => ({
+          ...r,
+          reviewerUsername: usersMap[r.reviewerid] || 'Unknown User'
+        }))
+        setReviews(mappedReviews)
+      } else {
+        setReviews([])
+      }
+    } catch (err) {
+      console.error('Error fetching reviews:', err)
+    } finally {
+      setReviewsLoading(false)
+    }
+  }
+
+  React.useEffect(() => {
+    if (showReviews && reviews.length === 0) {
+      fetchReviews()
+    }
+  }, [showReviews])
 
   const handleSave = async (e) => {
     e.preventDefault()
@@ -35,17 +95,40 @@ export default function Profile() {
     setSaving(true)
 
     /* Update public Users table */
-    const { error: profileErr } = await supabase
-      .from('Users')
-      .update({ Username: username.trim() })
-      .eq('UserID', user.id)
+    try {
+      const { error: profileErr } = await Promise.race([
+        supabase.from('users').update({ username: username.trim() }).eq('userid', user.id),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Database update timed out (8s).')), 8000))
+      ])
 
-    if (profileErr) { setError(profileErr.message); setSaving(false); return }
+      if (profileErr) { setError(profileErr.message); setSaving(false); return }
+    } catch (err) {
+      setError(err.message)
+      setSaving(false)
+      return
+    }
 
     /* Update password if entered */
     if (newPassword) {
-      const { error: passErr } = await supabase.auth.updateUser({ password: newPassword })
-      if (passErr) { setError(passErr.message); setSaving(false); return }
+      try {
+        const { error: passErr } = await Promise.race([
+          supabase.auth.updateUser({ password: newPassword }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Auth update timed out (8s).')), 8000))
+        ])
+        if (passErr) { setError(passErr.message); setSaving(false); return }
+        
+        // Changing the password triggers a session refresh in supabase-js which deadlocks
+        // any subsequent queries (like refreshProfile). To bypass this bug, we just reload.
+        setNewPassword('')
+        setConfirmPass('')
+        setSuccess('Password updated successfully! Refreshing session...')
+        setTimeout(() => window.location.reload(), 1500)
+        return
+      } catch (err) {
+        setError(err.message)
+        setSaving(false)
+        return
+      }
     }
 
     await refreshProfile()
@@ -55,19 +138,19 @@ export default function Profile() {
     setSaving(false)
   }
 
-  const rating = Number(profile?.OverallRating ?? 0)
+  const rating = Number(profile?.overallrating ?? 0)
 
   return (
     <div className="page-container max-w-2xl mx-auto animate-fade-in">
       <h1 className="text-2xl font-bold text-brand-navy mb-8">Profile Settings</h1>
 
       {/* ── Stats card ── */}
-      <div className="card p-6 mb-6 flex items-center gap-5">
+      <div className="card p-6 mb-4 flex items-center gap-5">
         <span className="avatar w-16 h-16 text-2xl shrink-0">
-          {profile?.Username?.slice(0, 2).toUpperCase() ?? '??'}
+          {profile?.username?.slice(0, 2).toUpperCase() ?? '??'}
         </span>
         <div>
-          <p className="text-lg font-bold text-gray-900">{profile?.Username ?? 'Loading…'}</p>
+          <p className="text-lg font-bold text-gray-900">{profile?.username ?? 'Loading…'}</p>
           <p className="text-sm text-gray-500">{user?.email}</p>
           <div className="flex items-center gap-1 mt-1.5">
             {[1,2,3,4,5].map(i => (
@@ -76,6 +159,64 @@ export default function Profile() {
             <span className="ml-1 text-sm text-gray-600 font-medium">{rating.toFixed(1)} overall rating</span>
           </div>
         </div>
+      </div>
+
+      {/* ── Reviews Dropdown / Collapsible ── */}
+      <div className="card p-0 overflow-hidden mb-6 transition-all duration-300 border border-gray-100 shadow-sm">
+        <button
+          type="button"
+          onClick={() => setShowReviews(!showReviews)}
+          className="w-full px-6 py-4 flex items-center justify-between bg-gray-50/50 hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Star className="w-5 h-5 text-amber-400 fill-current" />
+            <span className="font-bold text-brand-navy text-sm">
+              Reviews Left for You ({reviews.length > 0 ? reviews.length : rating > 0 ? '…' : 0})
+            </span>
+          </div>
+          <span className="text-brand-navy text-xs font-bold hover:underline">
+            {showReviews ? 'Hide Reviews ▴' : 'Show Reviews ▾'}
+          </span>
+        </button>
+
+        {showReviews && (
+          <div className="px-6 py-4 border-t border-gray-100 space-y-4 max-h-[300px] overflow-y-auto bg-white animate-fade-in">
+            {reviewsLoading ? (
+              <div className="py-6 flex items-center justify-center gap-2 text-gray-400 text-sm">
+                <Loader2 className="w-4 h-4 animate-spin text-brand-navy" />
+                Loading reviews…
+              </div>
+            ) : reviews.length === 0 ? (
+              <div className="py-6 text-center text-sm text-gray-400">
+                You haven't received any reviews yet. Complete swaps to get rated!
+              </div>
+            ) : (
+              reviews.map(rev => (
+                <div key={rev.reviewid} className="border-b border-gray-100 last:border-0 pb-3 last:pb-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-sm text-gray-800">{rev.reviewerUsername}</span>
+                    <span className="text-[10px] text-gray-400">{new Date(rev.reviewdate).toLocaleDateString()}</span>
+                  </div>
+                  <div className="flex items-center gap-0.5 mt-1">
+                    {[1, 2, 3, 4, 5].map(star => (
+                      <Star
+                        key={star}
+                        className={`w-3.5 h-3.5 ${
+                          star <= rev.rating ? 'text-amber-400 fill-current' : 'text-gray-200'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  {rev.comment && (
+                    <p className="text-xs text-gray-600 mt-1.5 italic bg-gray-50 p-2 rounded-lg border border-gray-100">
+                      "{rev.comment}"
+                    </p>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Form ── */}

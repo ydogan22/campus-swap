@@ -7,7 +7,7 @@ import {
   Loader2, SearchX, Tag,
 } from 'lucide-react'
 
-const STATUSES = ['Available', 'Pending', 'Sold']
+const STATUSES = ['Available', 'Sold']
 const PAGE_SIZE = 12
 
 export default function Home() {
@@ -22,14 +22,14 @@ export default function Home() {
   const pageRef = useRef(0)          // tracks current page without being a dep
 
   const [selectedCats,   setSelectedCats]    = useState([])
-  const [selectedStatus, setSelectedStatus]  = useState([])
-  const [sidebarOpen,    setSidebarOpen]     = useState(true)
+  const [selectedStatus, setSelectedStatus]  = useState(['Available'])
+  const [sidebarOpen,    setSidebarOpen]     = useState(false)
   const [catExpanded,    setCatExpanded]     = useState(true)
   const [statusExpanded, setStatusExpanded]  = useState(true)
 
   /* ── Load categories ── */
   useEffect(() => {
-    supabase.from('Category').select('CategoryID, CategoryName').then(({ data }) => {
+    supabase.from('category').select('categoryid, categoryname').then(({ data }) => {
       setCategories(data ?? [])
     })
   }, [])
@@ -43,19 +43,19 @@ export default function Home() {
       pageRef.current = 0
 
       let q = supabase
-        .from('Product')
+        .from('product')
         .select(`
-          ProductID, Title, ItemCondition, Status, ViewCount,
-          CategoryID,
-          Users ( Username, OverallRating ),
-          ProductPhoto ( PhotoURL )
+          productid, title, itemcondition, status, viewcount,
+          categoryid,
+          users ( username, overallrating ),
+          productphoto ( photourl )
         `)
         .range(0, PAGE_SIZE - 1)
-        .order('ProductID', { ascending: false })
+        .order('productid', { ascending: false })
 
-      if (query)                q = q.ilike('Title', `%${query}%`)
-      if (selectedCats.length)  q = q.in('CategoryID', selectedCats)
-      if (selectedStatus.length) q = q.in('Status', selectedStatus)
+      if (query)                q = q.ilike('title', `%${query}%`)
+      if (selectedCats.length)  q = q.in('categoryid', selectedCats)
+      if (selectedStatus.length) q = q.in('status', selectedStatus)
 
       const { data, error } = await q
       if (cancelled) return
@@ -70,9 +70,9 @@ export default function Home() {
 
       const mapped = (data ?? []).map(p => ({
         ...p,
-        thumbnail:      p.ProductPhoto?.[0]?.PhotoURL ?? null,
-        sellerUsername: p.Users?.Username ?? null,
-        sellerRating:   p.Users?.OverallRating ?? null,
+        thumbnail:      p.productphoto?.[0]?.photourl ?? null,
+        sellerUsername: p.users?.username ?? null,
+        sellerRating:   p.users?.overallrating ?? null,
       }))
 
       setProducts(mapped)
@@ -92,19 +92,19 @@ export default function Home() {
     const currentPage = pageRef.current
 
     let q = supabase
-      .from('Product')
+      .from('product')
       .select(`
-        ProductID, Title, ItemCondition, Status, ViewCount,
-        CategoryID,
-        Users ( Username, OverallRating ),
-        ProductPhoto ( PhotoURL )
+        productid, title, itemcondition, status, viewcount,
+        categoryid,
+        users ( username, overallrating ),
+        productphoto ( photourl )
       `)
       .range(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE - 1)
-      .order('ProductID', { ascending: false })
+      .order('productid', { ascending: false })
 
-    if (query)                q = q.ilike('Title', `%${query}%`)
-    if (selectedCats.length)  q = q.in('CategoryID', selectedCats)
-    if (selectedStatus.length) q = q.in('Status', selectedStatus)
+    if (query)                q = q.ilike('title', `%${query}%`)
+    if (selectedCats.length)  q = q.in('categoryid', selectedCats)
+    if (selectedStatus.length) q = q.in('status', selectedStatus)
 
     const { data, error } = await q
     if (error) {
@@ -115,9 +115,9 @@ export default function Home() {
 
     const mapped = (data ?? []).map(p => ({
       ...p,
-      thumbnail:      p.ProductPhoto?.[0]?.PhotoURL ?? null,
-      sellerUsername: p.Users?.Username ?? null,
-      sellerRating:   p.Users?.OverallRating ?? null,
+      thumbnail:      p.productphoto?.[0]?.photourl ?? null,
+      sellerUsername: p.users?.username ?? null,
+      sellerRating:   p.users?.overallrating ?? null,
     }))
 
     setProducts(prev => [...prev, ...mapped])
@@ -155,9 +155,9 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="flex gap-6">
+      <div className="flex flex-col lg:flex-row gap-6">
         {/* ── Sidebar (filters) ── */}
-        <aside className={`${sidebarOpen ? 'w-60 shrink-0' : 'hidden'} hidden lg:block`}>
+        <aside className={`${sidebarOpen ? 'w-full lg:w-60 shrink-0 block' : 'hidden lg:block lg:w-60 shrink-0'}`}>
           <div className="card p-4 sticky top-24 space-y-1">
             <div className="flex items-center justify-between mb-3">
               <span className="section-title text-base flex items-center gap-2">
@@ -182,15 +182,15 @@ export default function Home() {
               {catExpanded && (
                 <div className="space-y-1 ml-1 mt-1">
                   {categories.map(cat => (
-                    <label key={cat.CategoryID}
+                    <label key={cat.categoryid}
                       className="flex items-center gap-2 text-sm text-gray-600 hover:text-brand-navy cursor-pointer py-0.5">
                       <input
                         type="checkbox"
                         className="rounded border-gray-300 text-brand-navy focus:ring-brand-navy"
-                        checked={selectedCats.includes(cat.CategoryID)}
-                        onChange={() => toggleCat(cat.CategoryID)}
+                        checked={selectedCats.includes(cat.categoryid)}
+                        onChange={() => toggleCat(cat.categoryid)}
                       />
-                      {cat.CategoryName}
+                      {cat.categoryname}
                     </label>
                   ))}
                 </div>
@@ -248,11 +248,11 @@ export default function Home() {
           {hasFilters && (
             <div className="flex flex-wrap gap-2 mb-4">
               {selectedCats.map(id => {
-                const cat = categories.find(c => c.CategoryID === id)
+                const cat = categories.find(c => c.categoryid === id)
                 return cat ? (
                   <button key={id} onClick={() => toggleCat(id)}
                     className="badge badge-blue gap-1.5 cursor-pointer hover:bg-blue-200">
-                    <Tag className="w-2.5 h-2.5" /> {cat.CategoryName}
+                    <Tag className="w-2.5 h-2.5" /> {cat.categoryname}
                     <X className="w-2.5 h-2.5" />
                   </button>
                 ) : null
@@ -285,7 +285,7 @@ export default function Home() {
             <>
               <p className="text-xs text-gray-500 mb-4">{products.length} product{products.length !== 1 ? 's' : ''} found</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5 animate-fade-in">
-                {products.map(p => <ProductCard key={p.ProductID} product={p} />)}
+                {products.map(p => <ProductCard key={p.productid} product={p} />)}
               </div>
 
               {hasMore && (

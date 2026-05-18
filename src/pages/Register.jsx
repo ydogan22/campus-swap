@@ -36,38 +36,44 @@ export default function Register() {
 
     setLoading(true)
 
-    /* 1. Create Supabase Auth user */
-    const { data, error: signUpError } = await supabase.auth.signUp({
-      email: form.email,
-      password: form.password,
-    })
+    try {
+      /* 1. Create Supabase Auth user */
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: form.email,
+        password: form.password,
+      })
 
-    if (signUpError) {
-      setLoading(false)
-      setError(signUpError.message)
-      return
-    }
-
-    /* 2. Insert into public Users table */
-    const userId = data.user?.id
-    if (userId) {
-      const { error: insertError } = await supabase
-        .from('Users')
-        .insert({
-          UserID:        userId,
-          KUMail:        form.email,
-          Username:      form.username.trim(),
-          OverallRating: 0,
-        })
-      if (insertError) {
-        setLoading(false)
-        setError(insertError.message)
+      if (signUpError) {
+        setError(signUpError.message)
         return
       }
-    }
 
-    setLoading(false)
-    setSuccess(true)
+      /* 2. Insert into public Users table */
+      const userId = data.user?.id
+      if (userId) {
+        const { error: insertError } = await supabase
+          .from('users')
+          .upsert({
+            userid:        userId,
+            kumail:        form.email,
+            username:      form.username.trim(),
+            passwordhash:  'supabase-auth',
+            overallrating: 0,
+          }, { onConflict: 'userid' })
+        if (insertError) {
+          // If RLS blocks it, we might still have created the auth user.
+          setError('Auth succeeded, but profile creation failed: ' + insertError.message)
+          return
+        }
+      }
+
+      setSuccess(true)
+    } catch (err) {
+      console.error('[Register] Unexpected exception:', err)
+      setError('An unexpected error occurred: ' + err.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   if (success) {

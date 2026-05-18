@@ -33,6 +33,8 @@ export default function MyProducts() {
   })
   const [photoFiles,    setPhotoFiles]    = useState([])
   const [photoPreviews, setPhotoPreviews] = useState([])
+  const [existingPhotos, setExistingPhotos] = useState([])
+  const [photosToDelete, setPhotosToDelete] = useState([])
   const fileRef = useRef(null)
 
   /* ── Load ──
@@ -55,13 +57,16 @@ export default function MyProducts() {
       // Column name confirmed against schema: Product.OwnerID UUID NOT NULL
       console.log('[MyProducts] Fetching products for UserID:', user.id)
 
-      const [prodRes, catRes] = await Promise.all([
-        supabase
-          .from('Product')
-          .select('ProductID, Title, ItemCondition, Status, ViewCount, CategoryID, ProductPhoto(PhotoURL)')
-          .eq('OwnerID', user.id)     // OwnerID — matches schema FK column
-          .order('ProductID', { ascending: false }),
-        supabase.from('Category').select('CategoryID, CategoryName'),
+      const [prodRes, catRes] = await Promise.race([
+        Promise.all([
+          supabase
+            .from('product')
+            .select('productid, title, description, itemcondition, status, viewcount, categoryid, productphoto(photoid, photourl)')
+            .eq('ownerid', user.id)     // OwnerID — matches schema FK column
+            .order('productid', { ascending: false }),
+          supabase.from('category').select('categoryid, categoryname'),
+        ]),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Products query timed out (8s).')), 8000))
       ])
 
       // Strict error logging so Supabase issues are always visible
@@ -99,16 +104,19 @@ export default function MyProducts() {
 
   const openNew = () => {
     setEditProduct(null)
-    setForm({ title: '', description: '', condition: 'Good', categoryId: categories[0]?.CategoryID ?? '', status: 'Available' })
+    setForm({ title: '', description: '', condition: 'Good', categoryId: categories[0]?.categoryid ?? '', status: 'Available' })
     setPhotoFiles([]); setPhotoPreviews([])
+    setExistingPhotos([]); setPhotosToDelete([])
     setError(''); setSuccess('')
     setShowForm(true)
   }
 
   const openEdit = (p) => {
     setEditProduct(p)
-    setForm({ title: p.Title, description: '', condition: p.ItemCondition, categoryId: p.CategoryID, status: p.Status })
+    setForm({ title: p.title, description: p.description ?? '', condition: p.itemcondition, categoryId: p.categoryid, status: p.status })
     setPhotoFiles([]); setPhotoPreviews([])
+    setExistingPhotos(p.productphoto || [])
+    setPhotosToDelete([])
     setError(''); setSuccess('')
     setShowForm(true)
   }
@@ -124,48 +132,78 @@ export default function MyProducts() {
     setPhotoPreviews(prev => prev.filter((_, idx) => idx !== i))
   }
 
+  const removeExistingPhoto = (photo) => {
+    setExistingPhotos(prev => prev.filter(p => p.photoid !== photo.photoid))
+    setPhotosToDelete(prev => [...prev, photo])
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError(''); setSuccess('')
     if (!form.title.trim()) { setError('Title is required.'); return }
+    if (!form.categoryId) { setError('Category is required.'); return }
     setSaving(true)
 
     try {
-      let productId = editProduct?.ProductID
+      let productId = editProduct?.productid
 
       if (editProduct) {
         /* Update */
-        const { error: upErr } = await supabase
-          .from('Product')
-          .update({
-            Title: form.title.trim(),
-            ItemCondition: form.condition,
-            CategoryID: form.categoryId || null,
-            Status: form.status,
-          })
-          .eq('ProductID', productId)
+        const { error: upErr } = await Promise.race([
+          supabase
+            .from('product')
+            .update({
+              title: form.title.trim(),
+              description: form.description.trim() || null,
+              itemcondition: form.condition,
+              categoryid: form.categoryId || null,
+              status: form.status,
+            })
+            .eq('productid', productId),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Update timed out')), 8000))
+        ]).catch(err => ({ error: { message: err.message } }))
         if (upErr) { setError(upErr.message); return }
       } else {
         /* Insert */
-        const { data, error: insErr } = await supabase
-          .from('Product')
-          .insert({
-            OwnerID:       user.id,
-            Title:         form.title.trim(),
-            Description:   form.description.trim() || null,
-            ItemCondition: form.condition,
-            CategoryID:    form.categoryId || null,
-            Status:        'Available',
-            ViewCount:     0,
-          })
-          .select('ProductID')
-          .single()
+        const { data, error: insErr } = await Promise.race([
+          supabase
+            .from('product')
+            .insert({
+              ownerid:       user.id,
+              title:         form.title.trim(),
+              description:   form.description.trim() || null,
+              itemcondition: form.condition,
+              categoryid:    form.categoryId || null,
+              status:        'Available',
+              viewcount:     0,
+            })
+            .select('productid')
+            .single(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Insert timed out')), 8000))
+        ]).catch(err => ({ error: { message: err.message } }))
         if (insErr) { setError(insErr.message); return }
-        if (!data?.ProductID) { setError('Insert succeeded but returned no ID. Check RLS policies.'); return }
-        productId = data.ProductID
+        if (!data?.productid) { setError('Insert succeeded but returned no ID. Check RLS policies.'); return }
+        productId = data.productid
       }
 
-      /* Upload photos (only if we have a valid product ID) */
+      /* Delete removed existing photos */
+      if (photosToDelete.length > 0) {
+        // 1. Delete from database
+        const idsToDelete = photosToDelete.map(p => p.photoid)
+        const { error: delErr } = await supabase.from('productphoto').delete().in('photoid', idsToDelete)
+        if (delErr) { setError('Failed to delete old photos: ' + delErr.message); return }
+        
+        // 2. Delete from storage bucket
+        const pathsToDelete = photosToDelete.map(p => {
+          const urlParts = p.photourl.split(`${BUCKET}/`)
+          return urlParts.length > 1 ? urlParts[1] : null
+        }).filter(Boolean)
+        if (pathsToDelete.length > 0) {
+          await supabase.storage.from(BUCKET).remove(pathsToDelete)
+        }
+      }
+
+      /* Upload new photos (only if we have a valid product ID) */
       for (const file of photoFiles) {
         const ext  = file.name.split('.').pop()
         const path = `products/${productId}/${Date.now()}.${ext}`
@@ -173,8 +211,8 @@ export default function MyProducts() {
         if (upErr) { setError('Photo upload failed: ' + upErr.message); return }
         const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(path)
         const { error: photoErr } = await supabase
-          .from('ProductPhoto')
-          .insert({ ProductID: productId, PhotoURL: urlData.publicUrl })
+          .from('productphoto')
+          .insert({ productid: productId, photourl: urlData.publicUrl })
         if (photoErr) { setError('Photo record failed: ' + photoErr.message); return }
       }
 
@@ -190,8 +228,54 @@ export default function MyProducts() {
 
   const handleDelete = async (productId) => {
     if (!window.confirm('Delete this product?')) return
-    await supabase.from('Product').delete().eq('ProductID', productId)
+    
+    try {
+      // 1. Fetch photo URLs for this product to delete from Storage
+      const { data: photos } = await supabase
+        .from('productphoto')
+        .select('photourl')
+        .eq('productid', productId)
+
+      // 2. Delete files from the Storage Bucket
+      if (photos && photos.length > 0) {
+        const pathsToDelete = photos.map(p => {
+          // Extract the path after the bucket name. 
+          const urlParts = p.photourl.split(`${BUCKET}/`)
+          return urlParts.length > 1 ? urlParts[1] : null
+        }).filter(Boolean)
+
+        if (pathsToDelete.length > 0) {
+          await supabase.storage.from(BUCKET).remove(pathsToDelete)
+        }
+        
+        // 2.5 explicitly delete the photo rows from the database to prevent Foreign Key conflicts
+        await supabase.from('productphoto').delete().eq('productid', productId)
+      }
+
+      // 3. Delete the product from the database
+      await Promise.race([
+        supabase.from('product').delete().eq('productid', productId),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Delete timed out')), 8000))
+      ])
+      
+    } catch (err) {
+      alert(err.message)
+    }
+    
     load()
+  }
+
+  const handleMarkSold = async (productId) => {
+    if (!window.confirm('Mark this item as Sold? This will hide it from active searches.')) return
+    try {
+      await Promise.race([
+        supabase.from('product').update({ status: 'Sold' }).eq('productid', productId),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Update timed out')), 8000))
+      ])
+      load()
+    } catch (err) {
+      alert(err.message)
+    }
   }
 
   return (
@@ -242,7 +326,7 @@ export default function MyProducts() {
                 <select id="prod-category" value={form.categoryId} onChange={set('categoryId')} className="input">
                   <option value="">— Select —</option>
                   {categories.map(c => (
-                    <option key={c.CategoryID} value={c.CategoryID}>{c.CategoryName}</option>
+                    <option key={c.categoryid} value={c.categoryid}>{c.categoryname}</option>
                   ))}
                 </select>
               </div>
@@ -254,18 +338,6 @@ export default function MyProducts() {
                   {CONDITIONS.map(c => <option key={c}>{c}</option>)}
                 </select>
               </div>
-
-              {/* Status (edit only) */}
-              {editProduct && (
-                <div className="form-group">
-                  <label htmlFor="prod-status" className="label">Status</label>
-                  <select id="prod-status" value={form.status} onChange={set('status')} className="input">
-                    <option>Available</option>
-                    <option>Pending</option>
-                    <option>Sold</option>
-                  </select>
-                </div>
-              )}
 
               {/* Description */}
               <div className="form-group sm:col-span-2">
@@ -279,15 +351,29 @@ export default function MyProducts() {
             <div>
               <label className="label">Photos</label>
               <div className="flex flex-wrap gap-3 items-start">
+                
+                {/* Existing Photos */}
+                {existingPhotos.map((photo) => (
+                  <div key={photo.photoid} className="relative w-20 h-20">
+                    <img src={photo.photourl} className="w-full h-full object-cover rounded-xl border border-surface-border" alt="existing" />
+                    <button type="button" onClick={() => removeExistingPhoto(photo)}
+                      className="absolute -top-1.5 -right-1.5 bg-gray-800 text-white rounded-full w-5 h-5 flex items-center justify-center shadow hover:bg-red-500 transition-colors">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+
+                {/* New Photo Previews */}
                 {photoPreviews.map((src, i) => (
-                  <div key={i} className="relative w-20 h-20">
-                    <img src={src} className="w-full h-full object-cover rounded-xl border border-surface-border" alt="" />
+                  <div key={`new-${i}`} className="relative w-20 h-20">
+                    <img src={src} className="w-full h-full object-cover rounded-xl border border-surface-border opacity-80" alt="new" />
                     <button type="button" onClick={() => removePreview(i)}
                       className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center shadow">
                       <X className="w-3 h-3" />
                     </button>
                   </div>
                 ))}
+                
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
@@ -327,12 +413,12 @@ export default function MyProducts() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {products.map(p => {
             // Safe fallbacks — every field might be null if schema/RLS differs
-            const thumb     = p?.ProductPhoto?.[0]?.PhotoURL ?? null
-            const title     = p?.Title     ?? 'Untitled'
-            const condition = p?.ItemCondition ?? '—'
-            const status    = p?.Status    ?? 'Unknown'
-            const views     = p?.ViewCount ?? 0
-            const productId = p?.ProductID
+            const thumb     = p?.productphoto?.[0]?.photourl ?? null
+            const title     = p?.title     ?? 'Untitled'
+            const condition = p?.itemcondition ?? '—'
+            const status    = p?.status    ?? 'Unknown'
+            const views     = p?.viewcount ?? 0
+            const productId = p?.productid
 
             return (
               <div key={productId} className="card overflow-hidden">
@@ -349,8 +435,10 @@ export default function MyProducts() {
                       <ImageIcon className="w-8 h-8" />
                     </div>
                   )}
-                  <div className="absolute top-2 left-2">
-                    <span className={STATUS_STYLE[status] ?? 'badge-gray'}>{status}</span>
+                  <div className="absolute top-3 left-3">
+                    <span className={`${STATUS_STYLE[status] ?? 'badge-gray'} shadow-md border-2 border-white/50 font-bold uppercase tracking-wider text-[11px] px-3 py-1 backdrop-blur-sm`}>
+                      {status === 'Pending' ? 'Proposed' : status}
+                    </span>
                   </div>
                 </div>
                 <div className="p-4">
@@ -364,16 +452,26 @@ export default function MyProducts() {
                     <button onClick={() => openEdit(p)} className="btn-outline btn-sm flex-1 gap-1">
                       <Pencil className="w-3.5 h-3.5" /> Edit
                     </button>
+                    {productId && status !== 'Sold' && (
+                      <button
+                        onClick={() => handleMarkSold(productId)}
+                        className="btn-outline btn-sm flex-1 text-green-700 border-green-200 hover:bg-green-50 hover:border-green-300 gap-1"
+                        title="Mark as Sold"
+                      >
+                        <CheckCircle className="w-3.5 h-3.5" /> Mark Sold
+                      </button>
+                    )}
                     {productId && (
                       <button
                         onClick={() => handleDelete(productId)}
                         className="btn-ghost btn-sm text-red-500 hover:bg-red-50 gap-1 px-3"
+                        title="Delete Product"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     )}
                     {productId && (
-                      <Link to={`/product/${productId}`} className="btn-ghost btn-sm gap-1 px-3">
+                      <Link to={`/product/${productId}`} className="btn-ghost btn-sm gap-1 px-3" title="View Product">
                         <Eye className="w-3.5 h-3.5" />
                       </Link>
                     )}

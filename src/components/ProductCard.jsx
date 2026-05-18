@@ -20,46 +20,48 @@ const PLACEHOLDER = 'https://images.unsplash.com/photo-1512820790803-83ca734da79
 
 export default function ProductCard({ product }) {
   const {
-    ProductID, Title, ItemCondition, Status, ViewCount,
+    productid, title, itemcondition, status, viewcount,
     thumbnail, sellerUsername, sellerRating,
   } = product
 
   return (
     <Link
-      to={`/product/${ProductID}`}
-      id={`product-card-${ProductID}`}
+      to={`/product/${productid}`}
+      id={`product-card-${productid}`}
       className="card-hover group flex flex-col overflow-hidden"
     >
       {/* ── Thumbnail ── */}
       <div className="relative aspect-[4/3] overflow-hidden bg-gray-100">
         <img
           src={thumbnail ?? PLACEHOLDER}
-          alt={Title}
+          alt={title}
           className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
           loading="lazy"
           onError={e => { e.target.src = PLACEHOLDER }}
         />
         {/* Status badge */}
-        <div className="absolute top-2 left-2">
-          <span className={STATUS_STYLE[Status] ?? 'badge-gray'}>{Status ?? 'Unknown'}</span>
+        <div className="absolute top-2 left-2 flex flex-col gap-1.5 z-10">
+          <span className={`${STATUS_STYLE[status] ?? 'badge-gray'} shadow-sm border border-white/50 font-bold uppercase tracking-wider text-[10px] px-2 py-0.5 backdrop-blur-sm`}>
+            {status === 'Pending' ? 'Proposed' : (status ?? 'Unknown')}
+          </span>
         </div>
         {/* View count */}
         <div className="absolute bottom-2 right-2 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full">
           <Eye className="w-3 h-3" />
-          {ViewCount ?? 0}
+          {viewcount ?? 0}
         </div>
       </div>
 
       {/* ── Content ── */}
       <div className="flex flex-col flex-1 p-4 gap-2">
         <h3 className="font-semibold text-gray-900 text-sm leading-snug line-clamp-2 group-hover:text-brand-navy transition-colors">
-          {Title}
+          {title}
         </h3>
 
         <div className="flex items-center gap-2 flex-wrap">
-          <span className={CONDITION_STYLE[ItemCondition] ?? 'badge-gray'}>
+          <span className={CONDITION_STYLE[itemcondition] ?? 'badge-gray'}>
             <Tag className="w-2.5 h-2.5" />
-            {ItemCondition}
+            {itemcondition}
           </span>
         </div>
 
