@@ -2,6 +2,9 @@ import React, { useState } from 'react'
 import { supabase } from '../supabaseClient'
 import { useAuth } from '../context/AuthContext'
 import { User, Mail, Star, Lock, Save, Loader2, CheckCircle, AlertCircle, Eye, EyeOff } from 'lucide-react'
+import SQL_UPDATE_USERNAME       from '../sql/profile_update_username.sql?raw'
+import SQL_GET_REVIEWS           from '../sql/profile_get_reviews.sql?raw'
+import SQL_GET_REVIEWER_NAMES    from '../sql/profile_get_reviewer_usernames.sql?raw'
 
 export default function Profile() {
   const { user, profile, refreshProfile } = useAuth()
@@ -30,6 +33,7 @@ export default function Profile() {
     if (!user) return
     setReviewsLoading(true)
     try {
+      console.log('[SQL] profile_get_reviews.sql:\n', SQL_GET_REVIEWS)
       const { data: revs, error: revErr } = await supabase
         .from('review')
         .select('*')
@@ -41,6 +45,7 @@ export default function Profile() {
       if (revs && revs.length > 0) {
         // Fetch usernames of reviewers in a single query
         const reviewerIds = [...new Set(revs.map(r => r.reviewerid))]
+        console.log('[SQL] profile_get_reviewer_usernames.sql:\n', SQL_GET_REVIEWER_NAMES)
         const { data: usersData, error: usersErr } = await supabase
           .from('users')
           .select('userid, username')
@@ -96,6 +101,7 @@ export default function Profile() {
 
     /* Update public Users table */
     try {
+      console.log('[SQL] profile_update_username.sql:\n', SQL_UPDATE_USERNAME)
       const { error: profileErr } = await Promise.race([
         supabase.from('users').update({ username: username.trim() }).eq('userid', user.id),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Database update timed out (8s).')), 8000))

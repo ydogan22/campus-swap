@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react'
+import SQL_SIGN_IN from '../sql/login_sign_in.sql?raw'
 
 const KU_DOMAIN = '@ku.edu.tr'
 
@@ -29,6 +30,7 @@ export default function Login() {
     if (!validateEmail(email)) return
 
     setLoading(true)
+    console.log('[SQL] login_sign_in.sql:\n', SQL_SIGN_IN)
     const { error: authError } = await supabase.auth.signInWithPassword({ email, password })
     setLoading(false)
 

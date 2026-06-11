@@ -2,6 +2,8 @@ import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { Mail, Lock, User, Eye, EyeOff, AlertCircle, CheckCircle, Loader2 } from 'lucide-react'
+import SQL_SIGN_UP       from '../sql/register_sign_up.sql?raw'
+import SQL_INSERT_USER   from '../sql/register_insert_user.sql?raw'
 
 const KU_DOMAIN = '@ku.edu.tr'
 
@@ -38,6 +40,7 @@ export default function Register() {
 
     try {
       /* 1. Create Supabase Auth user */
+      console.log('[SQL] register_sign_up.sql:\n', SQL_SIGN_UP)
       const { data, error: signUpError } = await supabase.auth.signUp({
         email: form.email,
         password: form.password,
@@ -51,6 +54,7 @@ export default function Register() {
       /* 2. Insert into public Users table */
       const userId = data.user?.id
       if (userId) {
+        console.log('[SQL] register_insert_user.sql:\n', SQL_INSERT_USER)
         const { error: insertError } = await supabase
           .from('users')
           .upsert({

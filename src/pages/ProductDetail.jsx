@@ -6,6 +6,8 @@ import {
   Star, Eye, ArrowLeft, Tag, ChevronLeft, ChevronRight,
   MessageSquare, Loader2, AlertCircle, User2, ZoomIn,
 } from 'lucide-react'
+import SQL_GET_PRODUCT      from '../sql/productdetail_get_product.sql?raw'
+import SQL_INCREMENT_VIEW   from '../sql/productdetail_increment_view.sql?raw'
 
 const CONDITION_STYLE = {
   New: 'badge-green', 'Like New': 'badge-blue',
@@ -33,6 +35,7 @@ export default function ProductDetail() {
     const load = async () => {
       setLoading(true)
 
+      console.log('[SQL] productdetail_get_product.sql:\n', SQL_GET_PRODUCT)
       const { data, error: err } = await supabase
         .from('product')
         .select(`
@@ -56,6 +59,7 @@ export default function ProductDetail() {
       setPhotos(data.productphoto ?? [])
 
       /* Increment view count */
+      console.log('[SQL] productdetail_increment_view.sql:\n', SQL_INCREMENT_VIEW)
       await supabase
         .from('product')
         .update({ viewcount: (data.viewcount ?? 0) + 1 })

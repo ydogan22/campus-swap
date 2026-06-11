@@ -6,6 +6,15 @@ import {
   Plus, X, Loader2, AlertCircle, CheckCircle, Pencil,
   Tag, Eye, Package, Trash2, Image as ImageIcon, Upload,
 } from 'lucide-react'
+import SQL_GET_PRODUCTS           from '../sql/myproducts_get_products.sql?raw'
+import SQL_INSERT_PRODUCT         from '../sql/myproducts_insert_product.sql?raw'
+import SQL_UPDATE_PRODUCT         from '../sql/myproducts_update_product.sql?raw'
+import SQL_DELETE_PRODUCT         from '../sql/myproducts_delete_product.sql?raw'
+import SQL_MARK_SOLD              from '../sql/myproducts_mark_sold.sql?raw'
+import SQL_INSERT_PHOTO           from '../sql/myproducts_insert_photo.sql?raw'
+import SQL_GET_PHOTOS             from '../sql/myproducts_get_photos.sql?raw'
+import SQL_DELETE_PHOTOS_BY_IDS   from '../sql/myproducts_delete_photos_by_ids.sql?raw'
+import SQL_DELETE_PHOTOS_BY_PROD  from '../sql/myproducts_delete_photos_by_product.sql?raw'
 
 const CONDITIONS = ['New', 'Like New', 'Good', 'Fair', 'Poor']
 const BUCKET     = 'product-photos'
@@ -57,6 +66,7 @@ export default function MyProducts() {
       // Column name confirmed against schema: Product.OwnerID UUID NOT NULL
       console.log('[MyProducts] Fetching products for UserID:', user.id)
 
+      console.log('[SQL] myproducts_get_products.sql:\n', SQL_GET_PRODUCTS)
       const [prodRes, catRes] = await Promise.race([
         Promise.all([
           supabase
@@ -149,6 +159,7 @@ export default function MyProducts() {
 
       if (editProduct) {
         /* Update */
+        console.log('[SQL] myproducts_update_product.sql:\n', SQL_UPDATE_PRODUCT)
         const { error: upErr } = await Promise.race([
           supabase
             .from('product')
@@ -165,6 +176,7 @@ export default function MyProducts() {
         if (upErr) { setError(upErr.message); return }
       } else {
         /* Insert */
+        console.log('[SQL] myproducts_insert_product.sql:\n', SQL_INSERT_PRODUCT)
         const { data, error: insErr } = await Promise.race([
           supabase
             .from('product')
@@ -190,6 +202,7 @@ export default function MyProducts() {
       if (photosToDelete.length > 0) {
         // 1. Delete from database
         const idsToDelete = photosToDelete.map(p => p.photoid)
+        console.log('[SQL] myproducts_delete_photos_by_ids.sql:\n', SQL_DELETE_PHOTOS_BY_IDS)
         const { error: delErr } = await supabase.from('productphoto').delete().in('photoid', idsToDelete)
         if (delErr) { setError('Failed to delete old photos: ' + delErr.message); return }
         
@@ -210,6 +223,7 @@ export default function MyProducts() {
         const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, file)
         if (upErr) { setError('Photo upload failed: ' + upErr.message); return }
         const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(path)
+        console.log('[SQL] myproducts_insert_photo.sql:\n', SQL_INSERT_PHOTO)
         const { error: photoErr } = await supabase
           .from('productphoto')
           .insert({ productid: productId, photourl: urlData.publicUrl })
@@ -231,6 +245,7 @@ export default function MyProducts() {
     
     try {
       // 1. Fetch photo URLs for this product to delete from Storage
+      console.log('[SQL] myproducts_get_photos.sql:\n', SQL_GET_PHOTOS)
       const { data: photos } = await supabase
         .from('productphoto')
         .select('photourl')
@@ -249,10 +264,12 @@ export default function MyProducts() {
         }
         
         // 2.5 explicitly delete the photo rows from the database to prevent Foreign Key conflicts
+        console.log('[SQL] myproducts_delete_photos_by_product.sql:\n', SQL_DELETE_PHOTOS_BY_PROD)
         await supabase.from('productphoto').delete().eq('productid', productId)
       }
 
       // 3. Delete the product from the database
+      console.log('[SQL] myproducts_delete_product.sql:\n', SQL_DELETE_PRODUCT)
       await Promise.race([
         supabase.from('product').delete().eq('productid', productId),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Delete timed out')), 8000))
@@ -268,6 +285,7 @@ export default function MyProducts() {
   const handleMarkSold = async (productId) => {
     if (!window.confirm('Mark this item as Sold? This will hide it from active searches.')) return
     try {
+      console.log('[SQL] myproducts_mark_sold.sql:\n', SQL_MARK_SOLD)
       await Promise.race([
         supabase.from('product').update({ status: 'Sold' }).eq('productid', productId),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Update timed out')), 8000))

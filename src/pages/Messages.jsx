@@ -4,18 +4,21 @@ import { supabase } from '../supabaseClient'
 import { useAuth } from '../context/AuthContext'
 import ChatArea from '../components/ChatArea'
 import { MessageSquare, Loader2, Search } from 'lucide-react'
+import SQL_GET_ALL_MSGS      from '../sql/messages_get_all_for_user.sql?raw'
+import SQL_GET_PRODUCT_TITLE from '../sql/messages_get_product_title.sql?raw'
+import SQL_GET_USERNAME      from '../sql/messages_get_user_username.sql?raw'
 
 export default function Messages() {
-  const { user }         = useAuth()
-  const [searchParams]   = useSearchParams()
+  const { user } = useAuth()
+  const [searchParams] = useSearchParams()
 
   const initProductId = searchParams.get('productId')
-  const initSellerId  = searchParams.get('sellerId')
+  const initSellerId = searchParams.get('sellerId')
 
   const [conversations, setConversations] = useState([])
-  const [selected,      setSelected]      = useState(null)
-  const [loading,       setLoading]       = useState(true)
-  const [convSearch,    setConvSearch]    = useState('')
+  const [selected, setSelected] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [convSearch, setConvSearch] = useState('')
 
   /* ── Build conversation list from messages ── */
   useEffect(() => {
@@ -25,6 +28,7 @@ export default function Messages() {
       setLoading(true)
       try {
         /* All messages where I am sender or receiver */
+        console.log('[SQL] messages_get_all_for_user.sql:\n', SQL_GET_ALL_MSGS)
         const { data: msgs } = await supabase
           .from('message')
           .select('messageid, senderid, receiverid, productid, content, photourl, sentat')
@@ -34,8 +38,8 @@ export default function Messages() {
         /* Group by ProductID + other party */
         const convMap = new Map()
         for (const msg of msgs ?? []) {
-          const otherId  = msg.senderid === user.id ? msg.receiverid : msg.senderid
-          const key      = `${msg.productid}-${otherId}`
+          const otherId = msg.senderid === user.id ? msg.receiverid : msg.senderid
+          const key = `${msg.productid}-${otherId}`
           if (!convMap.has(key)) convMap.set(key, { productId: msg.productid, otherId, lastMsg: msg })
         }
 
@@ -46,15 +50,17 @@ export default function Messages() {
               supabase.from('product').select('title, ownerid').eq('productid', c.productId).single(),
               supabase.from('users').select('username').eq('userid', c.otherId).single(),
             ])
+            console.log('[SQL] messages_get_product_title.sql:\n', SQL_GET_PRODUCT_TITLE)
+            console.log('[SQL] messages_get_user_username.sql:\n', SQL_GET_USERNAME)
             const sellerId = prod?.ownerid
-            const buyerId  = sellerId === user.id ? c.otherId : user.id
+            const buyerId = sellerId === user.id ? c.otherId : user.id
             return {
               ...c,
-              productTitle:    prod?.title ?? 'Unknown product',
+              productTitle: prod?.title ?? 'Unknown product',
               sellerId,
               buyerId,
-              sellerUsername:  sellerId === user.id ? (await supabase.from('users').select('username').eq('userid', buyerId).single()).data?.username : other?.username,
-              otherUsername:   other?.username ?? 'Unknown',
+              sellerUsername: sellerId === user.id ? (await supabase.from('users').select('username').eq('userid', buyerId).single()).data?.username : other?.username,
+              otherUsername: other?.username ?? 'Unknown',
             }
           })
         )
@@ -75,12 +81,12 @@ export default function Messages() {
               supabase.from('users').select('username').eq('userid', initSellerId).single(),
             ])
             setSelected({
-              productId:      Number(initProductId),
-              sellerId:       initSellerId,
-              buyerId:        user.id,
-              productTitle:   prod?.title ?? 'Product',
+              productId: Number(initProductId),
+              sellerId: initSellerId,
+              buyerId: user.id,
+              productTitle: prod?.title ?? 'Product',
               sellerUsername: seller?.username ?? 'Seller',
-              otherUsername:  seller?.username ?? 'Seller',
+              otherUsername: seller?.username ?? 'Seller',
             })
           }
         } else if (enriched.length > 0) {
@@ -102,8 +108,8 @@ export default function Messages() {
 
   const fmt = (iso) => {
     if (!iso) return ''
-    const d    = new Date(iso)
-    const now  = new Date()
+    const d = new Date(iso)
+    const now = new Date()
     const diff = now - d
     if (diff < 86400000) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' })

@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
+import SQL_GET_CATEGORIES from '../sql/home_get_categories.sql?raw'
+import SQL_GET_PRODUCTS  from '../sql/home_get_products.sql?raw'
 import ProductCard from '../components/ProductCard'
+import HomeInsights from '../components/HomeInsights'
 import {
   SlidersHorizontal, X, ChevronDown, ChevronUp,
   Loader2, SearchX, Tag,
@@ -29,6 +32,7 @@ export default function Home() {
 
   /* ── Load categories ── */
   useEffect(() => {
+    console.log('[SQL] home_get_categories.sql:\n', SQL_GET_CATEGORIES)
     supabase.from('category').select('categoryid, categoryname').then(({ data }) => {
       setCategories(data ?? [])
     })
@@ -39,6 +43,7 @@ export default function Home() {
     let cancelled = false
 
     const doFetch = async () => {
+      console.log('[SQL] home_get_products.sql:\n', SQL_GET_PRODUCTS)
       setLoading(true)
       pageRef.current = 0
 
@@ -154,6 +159,9 @@ export default function Home() {
           </p>
         </div>
       </div>
+
+      {/* ── Campus Insights (advanced SQL queries) ── */}
+      <HomeInsights />
 
       <div className="flex flex-col lg:flex-row gap-6">
         {/* ── Sidebar (filters) ── */}
